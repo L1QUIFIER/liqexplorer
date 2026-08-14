@@ -1,7 +1,7 @@
 # Testing LiqExplorer
 
 GUI testing runs **headless on Xvfb `:99`**, never on the user's real display `:0`
-(`:0` is Sean's session — driving it with xdotool fights him for the pointer).
+(`:0` is the user's interactive session — driving it with xdotool fights them for the pointer).
 The app is driven over the Chrome DevTools Protocol with `tools/cdp.py`.
 
 ## Start a test instance
@@ -14,7 +14,7 @@ sleep 3 && DISPLAY=:99 xdpyinfo >/dev/null && echo up
 # optional: a window manager, so window activation/maximize behave
 DISPLAY=:99 setsid nohup openbox >/dev/null 2>&1 </dev/null &
 
-cd /mnt/cifs/files/Code/projects/tools/LiqExplorer
+cd /path/to/LiqExplorer
 bash bin/build.sh
 DISPLAY=:99 setsid nohup dbus-run-session -- env LIQEXPLORER_TEST=1 bash bin/run.sh \
   --remote-debugging-port=9223 --remote-allow-origins='*' >/tmp/liqexp-test.log 2>&1 </dev/null &
@@ -24,9 +24,8 @@ DISPLAY=:99 setsid nohup dbus-run-session -- env LIQEXPLORER_TEST=1 bash bin/run
 run never mutates real settings. `dbus-run-session` keeps portal dialogs (file pickers) off
 `:0`. `--remote-allow-origins` is required or the CDP websocket 403s.
 
-A test instance and the user's own instance coexist: Electron's single-instance lock is keyed
-to the user-data dir, so the scratch profile gets its own lock. **Verify** the user's window
-count on `:0` is unchanged after launching.
+A test instance and a normal user instance coexist: Electron's single-instance lock is keyed
+to the user-data dir, so the scratch profile gets its own lock. **Verify** the interactive `:0` window count is unchanged after launching.
 
 ## Drive it
 
@@ -76,7 +75,7 @@ File operations (data safety — these have bitten before)
 - [ ] **Undo a merge copy deletes only what the copy created**, never the pre-existing folder
 - [ ] A failed/cancelled **replace leaves the original destination intact** (temp + rename)
 - [ ] Case-only rename (`README.md` → `readme.md`) does not destroy a distinct existing file
-- [ ] Delete → Ctrl+Z restores from trash (test on `/mnt/cifs` too — separate trash dir)
+- [ ] Delete → Ctrl+Z restores from trash (test on a CIFS/SMB mount too — separate trash dir)
 - [ ] Shift+Delete asks for confirmation first
 - [ ] Right-drag → Copy/Move/Create shortcuts here, default bolded (move same volume, copy across)
 

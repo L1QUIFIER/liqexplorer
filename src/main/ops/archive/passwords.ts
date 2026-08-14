@@ -1,6 +1,6 @@
 // Password candidate discovery — the SILENT half of encrypted-archive support.
-// Ported from Sean's "Ultimate Extractor" (password_filename.py,
-// password_textfile.py, password_common.py, utils.is_valid_password): the same
+// Heuristics ported from a prior archive tool (password_filename /
+// password_textfile / password_common / is_valid_password): the same
 // markers, the same validity rules, the same ordering by confidence.
 //
 // This module ONLY guesses at things a human would have written down next to

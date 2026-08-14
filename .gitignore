@@ -9,3 +9,6 @@ __pycache__/
 # Local-only (machine-specific / not for public)
 docs/build-reports/
 docs/research/
+
+# esbuild scratch from ad-hoc test bundles
+/undefined/

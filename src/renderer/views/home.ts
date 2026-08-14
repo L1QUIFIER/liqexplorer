@@ -397,7 +397,16 @@ export function mountHome(root: HTMLElement): void {
       {
         label: 'Clear recent files list',
         disabled: !recents.length,
-        onClick: () => { void liq.invoke('clearRecent').then(refresh) },
+        // this wipes ~/.local/share/recently-used.xbel, which every GTK app
+        // (Nemo included) shares and nothing can restore — so confirm first
+        onClick: () => app.emit('show-confirm', {
+          title: 'Clear recent files',
+          message: 'This clears the recent files list for all apps that share it, '
+            + 'including your file manager and document apps. It cannot be undone.',
+          okLabel: 'Clear',
+          danger: true,
+          onOk: () => { void liq.invoke('clearRecent').then(refresh) },
+        }),
       },
       {
         label: 'Show recent files',

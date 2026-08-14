@@ -18,6 +18,7 @@ import * as theme from './platform/theme'
 import * as settings from './state/settings'
 import * as viewstate from './state/viewstate'
 import * as drag from './platform/drag'
+import './platform/favorites'   // self-registers listFavorites/addFavorite/listRecent/...
 import { createWindow } from './windows'
 
 type Handler = (...args: any[]) => unknown

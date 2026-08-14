@@ -141,6 +141,8 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
     const col = cols.find(c => c.key === key)
     if (!col) return
     const startW = col.width
+    // keep the resize cursor while the pointer drifts off the 8px divider
+    document.body.classList.add('is-colresizing')
     let raf = 0
     const move = (ev: MouseEvent) => {
       col.width = Math.max(MIN_W, startW + (ev.clientX - e0.clientX))
@@ -151,6 +153,7 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
     const up = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
+      document.body.classList.remove('is-colresizing')
       t.setViewState({ columns: cols.map(c => ({ ...c })) })
     }
     window.addEventListener('mousemove', move)

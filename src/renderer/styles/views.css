@@ -9,22 +9,40 @@
   inset: 0;
   overflow: auto;
   outline: none;
+  cursor: default;
 }
 .vh-canvas {
   position: relative;
   min-width: 100%;
 }
 
-/* ---------- generic item chrome ---------- */
+/* ---------- generic item chrome ----------
+   Rest -> hover -> pressed -> selected -> selected+hover -> selected+pressed,
+   plus a keyboard focus rect that reads differently from selection.        */
 .vh-item {
   border-radius: var(--radius);
   cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 .vh-item:hover { background: var(--bg-hover); }
-.vh-item.selected { background: var(--bg-selected); }
+.vh-item:active { background: var(--bg-press); }
+
+.vh-item.selected {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1px var(--selected-stroke);
+}
 .vh-item.selected:hover { background: var(--bg-selected-hover); }
-.vh-item.focused { outline: 1px dotted var(--text-secondary); outline-offset: -1px; }
+.vh-item.selected:active { background: var(--bg-selected-press); }
+
+/* keyboard focus: 2px focus stroke + 1px inner contrast line (Fluent focus
+   rect), so "focused" never looks like "selected" */
+.vh-item.focused {
+  outline: 2px solid var(--focus-stroke);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 3px var(--focus-stroke-inner);
+}
 .vh-item.cut img.vh-icon { opacity: .5; }
+.vh-item.cut .vh-label { opacity: .6; }
 .vh-item.drop-target {
   background: var(--bg-selected);
   outline: 1px solid var(--accent-selection);
@@ -144,14 +162,20 @@ img.vh-thumbimg { border-radius: 2px; }
 .vh-grid.selected { z-index: 2; }
 .vh-grid.selected .vh-label { -webkit-line-clamp: 8; }
 
-/* ---------- group headers ---------- */
+/* ---------- group headers ----------
+   The whole row is a click target (selects the group); the chevron is its own
+   target (collapses it), so both need their own hover/press feedback. */
 .vh-group {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 14px 0 12px;
   cursor: default;
+  border-radius: var(--radius);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
+.vh-group:hover { background: var(--bg-hover); }
+.vh-group:active { background: var(--bg-press); }
 .vh-group-label { font-weight: 600; }
 .vh-group-count { color: var(--text-secondary); }
 .vh-group-line {
@@ -168,8 +192,12 @@ img.vh-thumbimg { border-radius: 2px; }
   height: 22px;
   border-radius: var(--radius);
   color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.vh-group-chev:hover { background: var(--bg-hover); color: var(--text-primary); }
+.vh-group:hover .vh-group-chev { color: var(--text-primary); }
+.vh-group-chev:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.vh-group-chev:active { background: var(--bg-press); }
 
 /* ---------- details column header ---------- */
 .vh-header {
@@ -194,8 +222,13 @@ img.vh-thumbimg { border-radius: 2px; }
   overflow: visible;
   flex: none;
   border-radius: var(--radius);
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.vh-hcell:hover { background: var(--bg-hover); }
+/* the cell lights up only while the pointer is on the label area — over the
+   resize divider the divider itself is the target, so the cell stays quiet */
+.vh-hcell:hover:not(.vh-hsyn):not(:has(.vh-hdiv:hover)) { background: var(--bg-hover); }
+.vh-hcell:active:not(.vh-hsyn):not(:has(.vh-hdiv:active)) { background: var(--bg-press); }
 .vh-htext {
   overflow: hidden;
   white-space: nowrap;
@@ -207,9 +240,10 @@ img.vh-thumbimg { border-radius: 2px; }
   left: 50%;
   transform: translateX(-50%) scale(.62);
   line-height: 12px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   pointer-events: none;
 }
+/* ---- column resize dividers: wide grab zone, visible on hover ---- */
 .vh-hdiv {
   position: absolute;
   right: -4px;
@@ -227,9 +261,24 @@ img.vh-thumbimg { border-radius: 2px; }
   bottom: 7px;
   width: 1px;
   background: var(--divider);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              width var(--dur-fast) var(--ease-fluent),
+              top var(--dur-fast) var(--ease-fluent),
+              bottom var(--dur-fast) var(--ease-fluent);
 }
-.vh-hdiv:hover::after { background: var(--stroke-strong); }
-.vh-hsyn { color: var(--text-secondary); }
+/* hover: the hairline thickens to a full-height 2px accent bar so the grab
+   target is unmistakable; pressing keeps it lit */
+.vh-hdiv:hover::after,
+.vh-hdiv:active::after {
+  left: 3px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.vh-hdiv:active::after { top: 0; bottom: 0; background: var(--accent-light); }
+.vh-hsyn { color: var(--text-secondary); cursor: default; }
 .vh-hghost {
   position: fixed;
   z-index: 300;
@@ -265,7 +314,11 @@ img.vh-thumbimg { border-radius: 2px; }
   font-size: 11px;
   line-height: 1;
   color: var(--text-on-accent);
+  cursor: default;
+  transition: border-color var(--dur-fast) var(--ease-fluent),
+              background-color var(--dur-fast) var(--ease-fluent);
 }
+.vh-check:hover { border-color: var(--accent-selection); }
 .vh-checkboxes .vh-row .vh-check {
   display: flex;
   visibility: hidden;
@@ -427,4 +480,10 @@ img.vh-thumbimg { border-radius: 2px; }
 .vh-rightghost { opacity: 0.85; }
 body.is-rightdragging { cursor: copy; }
 body.is-rightdragging * { cursor: copy !important; }
+
+/* while a column is being resized the pointer usually leaves the 8px divider —
+   header.ts can set this class on <body> for the duration to keep the resize
+   cursor (same trick navpane.ts already uses for the splitter) */
+body.is-colresizing,
+body.is-colresizing * { cursor: col-resize !important; }
 .crumb.drop-target { background: var(--accent-selection); border-radius: var(--radius); }

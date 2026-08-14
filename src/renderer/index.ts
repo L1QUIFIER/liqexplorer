@@ -6,6 +6,7 @@ import { mountCommandBar } from './chrome/commandbar'
 import { mountStatusBar } from './chrome/statusbar'
 import { mountNavPane } from './nav/navpane'
 import { mountViewHost } from './views/view-host'
+import { mountHome } from './views/home'
 import { mountMenus } from './menus/context-menus'
 import { mountDialogs } from './dialogs/dialogs'
 import { mountKeyboard } from './core/keyboard'
@@ -30,6 +31,7 @@ async function boot() {
   mountCommandBar($('commandbar'))
   mountNavPane($('navpane'))
   mountViewHost($('viewhost'))
+  mountHome($('homehost'))          // shows/hides itself opposite #viewhost (home://)
   mountStatusBar($('statusbar'))
   mountMenus()
   mountDialogs()

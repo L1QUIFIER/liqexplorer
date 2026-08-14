@@ -1,0 +1,133 @@
+/* Options dialog (Folder Options + search index). Builds on dialogs.css:
+   .dlg / .dlg-title / .dlg-tabs / .btn are shared; everything here is scoped
+   to .dlg-options so no other dialog can be affected. */
+
+.dlg-options .opt-body {
+  padding: 14px 16px 16px;
+  min-height: 260px;
+}
+
+.dlg-options .opt-panel[hidden] { display: none; }
+
+.opt-group { margin-bottom: 16px; }
+.opt-group:last-child { margin-bottom: 4px; }
+
+.opt-heading {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.opt-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+}
+.opt-check input[type="checkbox"],
+.opt-check input[type="radio"] {
+  accent-color: var(--accent-light);
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.opt-note {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.opt-status {
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+.opt-status.err { color: var(--danger); }
+
+/* row of controls: input + buttons, or a label + dropdown */
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.opt-actions { justify-content: flex-end; }
+.opt-inline-label { font-size: var(--fs-body); color: var(--text-primary); }
+
+.opt-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  font-family: inherit;
+}
+.opt-input.bad { border-color: var(--danger); }
+
+.opt-select {
+  height: 28px;
+  min-width: 180px;
+  padding: 0 6px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  font-family: inherit;
+}
+
+/* editable path lists (indexed folders / exclusions) */
+.opt-list {
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  max-height: 132px;
+  overflow-y: auto;
+}
+.opt-list-empty {
+  padding: 7px 10px;
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+}
+.opt-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border-top: 1px solid var(--divider);
+}
+.opt-list-row:first-child { border-top: none; }
+.opt-list-row:hover { background: var(--bg-hover); }
+.opt-list-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.opt-list-x {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+}
+.opt-list-x:hover { background: var(--bg-active); color: var(--text-primary); }

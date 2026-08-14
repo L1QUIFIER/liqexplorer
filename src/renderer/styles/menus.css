@@ -47,6 +47,8 @@
 
 /* ---------- scrolling body (menus taller than the viewport) ---------- */
 
+/* scrollbar metrics come from base.css (compact tier: 12px gutter, no arrows,
+   thumb expands 4px -> 8px when the pointer is inside the menu) */
 .menu-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -54,14 +56,6 @@
   overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 4px;
-}
-.menu-scroll::-webkit-scrollbar { width: 10px; }
-.menu-scroll::-webkit-scrollbar-track { background: transparent; }
-.menu-scroll::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 5px;
-  border: 3px solid transparent;
-  background-clip: content-box;
 }
 
 /* ---------- items ---------- */
@@ -75,11 +69,16 @@
   margin: 1px 0;
   border-radius: var(--radius);
   white-space: nowrap;
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
+/* .is-active is keyboard/pointer tracking from menu.ts; the :hover rule keeps
+   the fill honest if the pointer arrives without a mousemove event */
 .menu-item.is-active,
-.menu-item.is-open { background: var(--bg-hover); }
-.menu-item:not(.is-disabled):active { background: var(--bg-active); }
-.menu-item.is-disabled { color: var(--text-disabled); }
+.menu-item.is-open,
+.menu-item:not(.is-disabled):hover { background: var(--bg-hover); }
+.menu-item:not(.is-disabled):active { background: var(--bg-press); }
+.menu-item.is-disabled { color: var(--text-disabled); background: transparent; }
 .menu-item.is-danger { color: var(--danger); }
 
 /* leading 16px column: check / radio bullet / icon (keeps labels aligned) */
@@ -164,9 +163,11 @@
   border-radius: var(--radius);
   color: var(--text-primary);
   font-family: inherit;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .menu-iconbtn:hover:not(:disabled) { background: var(--bg-hover); }
-.menu-iconbtn:active:not(:disabled) { background: var(--bg-active); }
+.menu-iconbtn:active:not(:disabled) { background: var(--bg-press); }
 .menu-iconbtn:focus-visible {
   background: var(--bg-hover);
   outline: 1px solid var(--accent);

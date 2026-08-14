@@ -66,9 +66,11 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.dlg-x:hover { background: var(--bg-hover); color: var(--text-primary); }
-.dlg-x:active { background: var(--bg-active); }
+.dlg-x:hover { background: var(--caption-close-bg); color: #fff; }
+.dlg-x:active { background: var(--caption-close-bg-active); color: rgba(255, 255, 255, 0.7); }
 
 .dlg-body {
   padding: 12px 16px 16px;
@@ -79,6 +81,7 @@
   color: var(--text-secondary);
   line-height: 1.45;
   user-select: text;
+  cursor: text;   /* genuinely selectable copy gets the I-beam; chrome does not */
 }
 
 /* footer strip: slightly layered background + divider, Win11 ContentDialog */
@@ -106,10 +109,13 @@
   border: 1px solid var(--stroke-strong);
   font-size: var(--fs-body);
   color: var(--text-primary);
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              border-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.btn:hover { background: var(--bg-hover); }
-.btn:active { background: var(--bg-active); }
-.btn:disabled { color: var(--text-disabled); background: var(--bg-content); }
+.btn:hover:not(:disabled) { background: var(--bg-hover); }
+.btn:active:not(:disabled) { background: var(--bg-press); }
 
 .btn-primary {
   background: var(--accent-light);
@@ -117,17 +123,32 @@
   color: var(--dlg-on-accent);
   font-weight: 500;
 }
-.btn-primary:hover { background: var(--accent); }
-.btn-primary:active { background: var(--accent); opacity: 0.9; }
-.btn-primary:disabled { background: var(--bg-active); color: var(--text-disabled); }
+.btn-primary:hover:not(:disabled) { background: var(--accent); }
+.btn-primary:active:not(:disabled) { background: var(--accent); opacity: 0.85; }
 
 .btn-danger {
   background: var(--danger);
   border-color: transparent;
   color: var(--dlg-on-danger);
 }
-.btn-danger:hover { background: var(--danger); filter: brightness(1.08); }
-.btn-danger:active { background: var(--danger); opacity: 0.9; }
+.btn-danger:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); }
+.btn-danger:active:not(:disabled) { background: var(--danger); filter: brightness(0.92); }
+
+/* disabled buttons are inert — dimmed, and nothing happens under the pointer */
+.btn:disabled {
+  color: var(--text-disabled);
+  background: var(--bg-content);
+  border-color: var(--stroke);
+  opacity: 0.75;
+}
+.btn-primary:disabled,
+.btn-danger:disabled {
+  background: var(--bg-active);
+  border-color: transparent;
+  color: var(--text-disabled);
+  filter: none;
+  opacity: 1;
+}
 
 .btn-small {
   height: 26px;
@@ -142,8 +163,12 @@
   min-width: 0;
   color: var(--accent);
   font-size: var(--fs-body);
+  background: transparent;
+  border-color: transparent;
+  cursor: pointer;   /* hyperlink — the one place Explorer shows a hand */
 }
-.btn-link:hover { text-decoration: underline; }
+.btn-link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+.btn-link:active:not(:disabled) { background: transparent; opacity: 0.75; }
 
 .dlg-check {
   display: flex;
@@ -152,7 +177,15 @@
   margin-top: 12px;
   color: var(--text-primary);
 }
-.dlg-check input[type="checkbox"] { accent-color: var(--accent-light); width: 16px; height: 16px; }
+.dlg-check input[type="checkbox"] {
+  accent-color: var(--accent-light);
+  width: 16px;
+  height: 16px;
+  cursor: default;
+  transition: filter var(--dur-fast) var(--ease-fluent);
+}
+.dlg-check:hover input[type="checkbox"] { filter: brightness(1.08); }
+.dlg-check input[type="checkbox"]:active { filter: brightness(0.92); }
 .dlg-check-disabled { color: var(--text-secondary); margin-top: 0; }
 
 /* focus rings */
@@ -178,8 +211,11 @@
   color: var(--text-secondary);
   border-radius: var(--radius) var(--radius) 0 0;
   position: relative;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .dlg-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.dlg-tab:active { background: var(--bg-press); color: var(--text-primary); }
 .dlg-tab.active { color: var(--text-primary); }
 .dlg-tab.active::after {
   content: '';
@@ -206,6 +242,7 @@
 .props-value {
   color: var(--text-primary);
   user-select: text;
+  cursor: text;
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -228,7 +265,10 @@
   background: var(--bg-content);
   color: var(--text-primary);
   user-select: text;
+  transition: border-color var(--dur-fast) var(--ease-fluent);
 }
+.props-name:hover:not(:disabled) { border-color: var(--accent); }
+.props-name:focus { border-color: var(--accent); outline: none; }
 
 .props-openwith {
   display: flex;
@@ -329,10 +369,13 @@
   padding: 7px 10px;
   text-align: left;
   border-radius: 0;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 .ow-row:hover { background: var(--bg-hover); }
+.ow-row:active { background: var(--bg-press); }
 .ow-row.sel { background: var(--bg-selected); }
 .ow-row.sel:hover { background: var(--bg-selected-hover); }
+.ow-row.sel:active { background: var(--bg-selected-press); }
 .ow-icon { flex: none; width: 24px; height: 24px; object-fit: contain; }
 .ow-meta { min-width: 0; }
 .ow-name {
@@ -353,8 +396,11 @@
   font-size: var(--fs-body);
   border-top: 1px solid var(--divider);
   text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 .ow-more:hover { background: var(--bg-hover); }
+.ow-more:active { background: var(--bg-press); }
 .ow-more-chev { font-size: 11px; line-height: 1; }
 
 /* -------------------------------------------------- operations flyout cards */
@@ -400,9 +446,11 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .ops-ibtn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.ops-ibtn:active { background: var(--bg-active); }
+.ops-ibtn:active { background: var(--bg-press); color: var(--text-primary); }
 
 .ops-bar {
   position: relative;
@@ -444,8 +492,10 @@
   padding: 2px 2px;
   color: var(--accent);
   font-size: var(--fs-caption);
+  cursor: pointer;
 }
 .ops-toggle:hover { text-decoration: underline; }
+.ops-toggle:active { opacity: 0.75; }
 
 .ops-details { display: none; }
 .ops-details.open { display: block; margin-top: 6px; }
@@ -490,6 +540,8 @@
   font-weight: 600;
 }
 .ops-warn-summary svg { flex: none; }
+.ops-warn-summary:hover { text-decoration: underline; }
+.ops-warn-summary:active { opacity: 0.75; }
 .ops-warn-chev { margin-left: auto; font-size: 11px; }
 .ops-fail-list {
   max-height: 120px;

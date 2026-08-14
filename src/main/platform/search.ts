@@ -1,14 +1,24 @@
-// Search: async BFS name-match walker + optional ripgrep content pass.
+// Search: async BFS name-match walker + optional ripgrep content pass, with an
+// index fast path in front of the walker.
 // Streams SearchChunk batches (~200 entries or 300ms) on PUSH.searchChunk,
 // caps at 10k results, dedupes walker/rg hits, and kills both on cancel.
+//
+// Name matching comes from the index (opt-in, see platform/indexer.ts) whenever
+// settings.searchUseIndex is on and the index covers the searched root — that
+// answers in one in-memory scan with zero stat() calls, which is what makes
+// searching the CIFS share bearable. Everything else (uncovered roots, index
+// off/stale-empty) walks live exactly as before. Content search is always
+// ripgrep.
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
-import type { WebContents } from 'electron'
-import { PUSH } from '../../shared/ipc'
+import { ipcMain, type WebContents } from 'electron'
+import { CH, PUSH } from '../../shared/ipc'
 import type { FileEntry, SearchChunk, SearchRequest } from '../../shared/types'
 import { entryFor } from '../fs/list'
+import { getSettings } from '../state/settings'
+import { indexCovers, indexSearch, nameMatcher, refreshIfStale } from './indexer'
 
 const MAX_RESULTS = 10_000
 const BATCH_SIZE = 200
@@ -42,15 +52,37 @@ export async function startSearch(wc: WebContents, req: SearchRequest): Promise<
   job.flushTimer = setInterval(() => { if (job.batch.length) flush(job) }, FLUSH_MS)
 
   void (async () => {
-    const match = makeMatcher(req.query)
-    const tasks: Promise<void>[] = [walk(job, req, match)]
+    const useIndex = searchUsesIndex(req.root, req.showHidden)
+    const tasks: Promise<void>[] = [
+      useIndex ? fromIndex(job, req) : walk(job, req, makeMatcher(req.query)),
+    ]
     if (req.contents && req.query) tasks.push(runRipgrep(job, req))
     await Promise.allSettled(tasks)
     finish(job)
+    // the index answered from a snapshot: quietly re-scan when it is stale so
+    // the next search sees today's tree (no-op when refresh is set to manual)
+    if (useIndex) refreshIfStale()
   })()
 
   return reqId
 }
+
+/**
+ * True when a search rooted at `root` would be answered from the index.
+ * `showHidden` matters: an index built without hidden files cannot answer a
+ * "show hidden items" search, so that case walks live instead of quietly
+ * returning fewer results than the folder actually holds.
+ */
+export function searchUsesIndex(root: string, showHidden = false): boolean {
+  const s = getSettings()
+  return s.searchUseIndex && (!showHidden || s.indexHidden) && indexCovers(root)
+}
+
+// Self-registered like ops/quick.ts (main/ipc.ts stays untouched). The results
+// view can ask this to show Explorer's "searches might be slow in non-indexed
+// locations" banner without re-deriving the coverage rules.
+ipcMain.handle(CH('searchUsesIndex'), (_e, root: string, showHidden?: boolean) =>
+  searchUsesIndex(root, showHidden))
 
 export function cancelSearch(reqId: number): void {
   const job = jobs.get(reqId)
@@ -89,19 +121,23 @@ function finish(job: SearchJob): void {
 // ---------------------------------------------------------------- matching
 
 /**
- * Case-insensitive substring by default; '*'/'?' switch to whole-name
- * wildcard matching (everything else escaped).
+ * Case-insensitive substring by default; '*'/'?' switch to whole-name wildcard
+ * matching (everything else escaped). Lives in indexer.ts so the live walker
+ * and the index cannot drift apart on what "matches" means.
  */
-function makeMatcher(query: string): (name: string) => boolean {
-  if (/[*?]/.test(query)) {
-    const re = new RegExp(
-      '^' + query.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
-      'i',
-    )
-    return (name) => re.test(name)
+const makeMatcher = nameMatcher
+
+/** push an already-built entry (index hits: no stat, that is the point) */
+function addEntry(job: SearchJob, e: FileEntry): void {
+  if (job.cancelled || job.count >= MAX_RESULTS) return
+  if (job.seen.has(e.path)) return
+  job.seen.add(e.path)
+  job.count++
+  job.batch.push(e)
+  if (job.count >= MAX_RESULTS) {
+    try { job.rg?.kill() } catch { /* already exited */ }
   }
-  const q = query.toLowerCase()
-  return (name) => name.toLowerCase().includes(q)
+  if (job.batch.length >= BATCH_SIZE) flush(job)
 }
 
 async function addResult(job: SearchJob, dir: string, name: string): Promise<void> {
@@ -118,6 +154,37 @@ async function addResult(job: SearchJob, dir: string, name: string): Promise<voi
     try { job.rg?.kill() } catch { /* already exited */ }
   }
   if (job.batch.length >= BATCH_SIZE) flush(job)
+}
+
+// ---------------------------------------------------------------- index path
+
+/**
+ * Answer from the index. Same streaming contract as the walker: entries land in
+ * the same batch/dedupe set, so ripgrep hits merge in and the 10k cap applies
+ * unchanged. Falls back to the live walk when the index turns out to be
+ * unusable (cleared between the check and the read, unreadable file, ...).
+ */
+async function fromIndex(job: SearchJob, req: SearchRequest): Promise<void> {
+  let hits: FileEntry[]
+  try {
+    hits = await indexSearch(req.query, {
+      root: req.root,
+      subfolders: req.subfolders,
+      showHidden: req.showHidden,
+      limit: MAX_RESULTS,
+    })
+  } catch { hits = [] }
+  if (job.cancelled) return
+  if (!hits.length && !indexCovers(req.root)) {
+    await walk(job, req, makeMatcher(req.query))
+    return
+  }
+  for (let i = 0; i < hits.length; i++) {
+    if (job.cancelled || job.count >= MAX_RESULTS) break
+    addEntry(job, hits[i])
+    // let the flush timer / renderer breathe on very large result sets
+    if ((i & 1023) === 1023) await new Promise<void>(res => setImmediate(res))
+  }
 }
 
 // ---------------------------------------------------------------- name walker

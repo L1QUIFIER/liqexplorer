@@ -13,6 +13,8 @@ const SVG_TAB_CLOSE = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="
 const SVG_PLUS = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>'
 
 function tabIconName(t: Tab): string {
+  if (t.path === 'home://') return 'go-home,user-home,folder-home,folder'
+  if (t.path === 'computer://') return 'computer,drive-harddisk,folder'
   if (t.path === 'trash://') return 'user-trash,folder'
   if (t.path === app.homePath) return 'user-home,folder-home,folder'
   return 'folder'

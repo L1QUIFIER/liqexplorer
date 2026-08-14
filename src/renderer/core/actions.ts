@@ -1,6 +1,7 @@
 // Centralized commands. Command bar, context menus, and keyboard shortcuts all
 // call these — one implementation per verb, Explorer semantics.
 import { app, liq, Tab } from './app'
+import { isArchiveName } from '../../shared/archive'
 
 /** This PC rows are real mount points — cut/rename/delete there would act on a
  * whole drive, so those verbs are inert (Explorer greys them for drives). */
@@ -77,9 +78,24 @@ export const actions = {
     const paths = [...tab.selection]
     if (paths.length) await liq.startOp({ kind: 'compress', sources: paths, dest: tab.path, format: 'zip' })
   },
-  async extract(tab = app.activeTab): Promise<void> {
-    const sel = tab.selectedEntries().filter(e => /\.(zip|7z|rar|tar|gz|bz2|xz)$/i.test(e.name))
-    if (sel.length) await liq.startOp({ kind: 'extract', sources: sel.map(e => e.path), dest: tab.path })
+  /**
+   * Explorer has three extract verbs:
+   *   'here'  — single-root policy: one top-level entry extracts in place,
+   *             several get wrapped in <archive-name>/ (no more tar bombs)
+   *   'named' — always create <archive-name>/
+   *   'to'    — caller supplies the destination ("Extract All...")
+   * The destination policy itself lives in the main-process archive backend;
+   * the renderer only says which verb the user picked.
+   */
+  async extract(tab = app.activeTab, mode: 'here' | 'named' | 'to' = 'here', dest?: string): Promise<void> {
+    const sel = tab.selectedEntries().filter(e => isArchiveName(e.name))
+    if (!sel.length) return
+    await liq.startOp({
+      kind: 'extract',
+      sources: sel.map(e => e.path),
+      dest: mode === 'to' ? (dest ?? tab.path) : tab.path,
+      extractMode: mode,
+    })
   },
 
   // --- open ---

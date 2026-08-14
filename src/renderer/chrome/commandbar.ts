@@ -125,7 +125,9 @@ export function mountCommandBar(root: HTMLElement): void {
         onClick: () => newFromFile(name),
       })),
     ]
-    showMenu(items, { x: 0, y: 0, anchorEl: newBtn, minWidth: 240 })
+    newBtn.classList.add('open')   // keep the button lit while its flyout is up
+    showMenu(items, { x: 0, y: 0, anchorEl: newBtn, minWidth: 240,
+      onClose: () => newBtn.classList.remove('open') })
   })
 
   // ---- Sort menu ----
@@ -155,7 +157,9 @@ export function mountCommandBar(root: HTMLElement): void {
         ],
       },
     ]
-    showMenu(items, { x: 0, y: 0, anchorEl: sortBtn, minWidth: 200 })
+    sortBtn.classList.add('open')   // keep the button lit while its flyout is up
+    showMenu(items, { x: 0, y: 0, anchorEl: sortBtn, minWidth: 200,
+      onClose: () => sortBtn.classList.remove('open') })
   })
 
   // ---- View menu ----
@@ -181,7 +185,9 @@ export function mountCommandBar(root: HTMLElement): void {
         ],
       },
     ]
-    showMenu(items, { x: 0, y: 0, anchorEl: viewBtn, minWidth: 220 })
+    viewBtn.classList.add('open')   // keep the button lit while its flyout is up
+    showMenu(items, { x: 0, y: 0, anchorEl: viewBtn, minWidth: 220,
+      onClose: () => viewBtn.classList.remove('open') })
   })
 
   // ---- See more (...) menu ----
@@ -201,8 +207,12 @@ export function mountCommandBar(root: HTMLElement): void {
       { label: 'Copy path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath() } },
       { separator: true },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties() } },
+      { separator: true },
+      { label: 'Options', onClick: () => app.emit('show-options') },
     ]
-    showMenu(items, { x: 0, y: 0, anchorEl: moreBtn, minWidth: 240 })
+    moreBtn.classList.add('open')   // keep the button lit while its flyout is up
+    showMenu(items, { x: 0, y: 0, anchorEl: moreBtn, minWidth: 240,
+      onClose: () => moreBtn.classList.remove('open') })
   })
 
   // ---- enable/disable + trash swap ----

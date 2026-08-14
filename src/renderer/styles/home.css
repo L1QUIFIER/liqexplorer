@@ -1,0 +1,165 @@
+/* Home page — Quick access tiles, Favorites tiles, Recent list.
+   #homehost is the view host's twin: only one of the two is ever displayed
+   (see views/home.ts), so it repeats #viewhost's box in base.css. */
+
+#homehost {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-content);
+  border: 1px solid var(--stroke);
+  border-right: none;
+  border-bottom: none;
+  border-radius: var(--radius-lg) 0 0 0;
+}
+
+.home-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 14px 20px 28px;
+}
+
+/* ---------- sections ---------- */
+
+.home-section { margin-bottom: 18px; }
+
+.home-sec-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  cursor: default;
+  text-align: left;
+}
+.home-sec-header:hover { background: var(--bg-hover); }
+.home-sec-header:active { background: var(--bg-active); }
+
+.home-sec-chev {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.home-sec-chev svg { transform: rotate(90deg); transition: transform 0.1s ease; }
+.home-section.collapsed .home-sec-chev svg { transform: none; }
+
+.home-sec-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.home-sec-count {
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+
+.home-sec-body { padding: 6px 0 0 22px; }
+
+.home-empty {
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+  padding: 6px 4px 10px;
+}
+
+/* ---------- tiles (Quick access / Favorites) ---------- */
+
+.home-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 4px 8px;
+}
+
+.home-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  outline: none;
+}
+.home-tile:hover { background: var(--bg-hover); }
+.home-tile:active { background: var(--bg-active); }
+.home-tile:focus-visible { outline: 1px dotted var(--text-secondary); outline-offset: -2px; }
+
+img.home-tile-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  object-fit: contain;
+}
+
+.home-tile-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-tile-pin {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+/* ---------- recent list ---------- */
+
+.home-list { display: flex; flex-direction: column; }
+
+.home-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  outline: none;
+}
+.home-row:hover { background: var(--bg-hover); }
+.home-row:active { background: var(--bg-active); }
+.home-row:focus-visible { outline: 1px dotted var(--text-secondary); outline-offset: -2px; }
+
+img.home-row-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  object-fit: contain;
+}
+
+.home-row-name {
+  flex: 0 1 320px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-row-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+.home-row-time {
+  flex: none;
+  width: 130px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+}

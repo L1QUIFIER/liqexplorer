@@ -6,6 +6,7 @@ import { mountConflict } from './conflict'
 import { mountConfirm } from './confirm'
 import { mountProperties } from './properties'
 import { mountOpenWith } from './openwith'
+import { mountOptions } from './options'
 
 export function mountDialogs(): void {
   mountOps()
@@ -13,6 +14,7 @@ export function mountDialogs(): void {
   mountConfirm()
   mountProperties()
   mountOpenWith()
+  mountOptions()
 }
 
 // ---------------------------------------------------------------- modal stack

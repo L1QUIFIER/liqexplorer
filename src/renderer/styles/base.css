@@ -14,7 +14,7 @@ body {
 #commandbar { height: var(--commandbar-h); flex: none; }
 #main { flex: 1; display: flex; min-height: 0; }
 #navpane { width: var(--navpane-w); flex: none; overflow-y: auto; }
-#navpane-splitter { width: 4px; flex: none; cursor: col-resize; }
+#navpane-splitter { width: 6px; flex: none; cursor: col-resize; }
 #viewhost { flex: 1; min-width: 0; background: var(--bg-content); border-radius: var(--radius-lg) 0 0 0; border: 1px solid var(--stroke); border-right: none; border-bottom: none; position: relative; }
 #sidepane { width: 300px; flex: none; overflow-y: auto; background: var(--bg-content); }
 #statusbar { height: var(--statusbar-h); flex: none; display: flex; align-items: center; }
@@ -22,10 +22,104 @@ body {
 #menu-layer > *, #dialog-layer > * { pointer-events: auto; }
 #ops-flyout { position: fixed; right: 16px; bottom: 44px; z-index: 90; }
 img.icon { width: 16px; height: 16px; object-fit: contain; }
-::-webkit-scrollbar { width: 12px; height: 12px; }
-::-webkit-scrollbar-thumb { background: transparent; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
-*:hover > ::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb); background-clip: content-box; }
-::-webkit-scrollbar-track { background: transparent; }
-button { font: inherit; color: inherit; background: none; border: none; }
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: default; }
 input { font: inherit; }
 [hidden] { display: none !important; }
+
+/* Explorer never puts an I-beam over its chrome; only real text fields get one.
+   (body sets user-select:none — anything selectable opts back in explicitly.) */
+:where(button, label, span, div, td, th, li) { cursor: default; }
+input:where(:not([type="checkbox"]):not([type="radio"]):not([type="button"])),
+textarea,
+[contenteditable="true"] { cursor: text; user-select: text; }
+
+/* ============================================================
+   Fluent scrollbars — thin translucent rail at rest; the whole
+   bar expands (thumb 6px -> 12px, track + end arrows appear) as
+   soon as the pointer enters the scrolling region. The gutter
+   width never changes, so expanding never reflows content.
+
+   Per-surface knobs (set --sb-* on the scrolling element):
+     --sb-size        gutter width           (default 16px)
+     --sb-inset       rest thumb padding     (6px thumb)
+     --sb-inset-hover hover thumb padding    (12px thumb)
+     --sb-btn-h       arrow button size      (0 disables arrows)
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: var(--sb-size);
+  height: var(--sb-size);
+  background: transparent;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-resizer { display: none; }
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--sb-thumb);
+  background-clip: content-box;
+  border: var(--sb-inset) solid transparent;
+  border-radius: var(--sb-radius);
+}
+::-webkit-scrollbar-thumb:vertical { min-height: 28px; }
+::-webkit-scrollbar-thumb:horizontal { min-width: 28px; }
+
+/* End arrows: one at each end (never the paired variants). The box is reserved
+   at rest but paints nothing, so revealing the glyph on hover never moves the
+   thumb. --sb-btn-h: 0 removes them entirely (compact tier below). */
+::-webkit-scrollbar-button {
+  display: block;
+  background: transparent no-repeat center;
+  background-size: 10px 10px;
+}
+::-webkit-scrollbar-button:vertical { height: var(--sb-btn-h); }
+::-webkit-scrollbar-button:horizontal { width: var(--sb-btn-h); }
+::-webkit-scrollbar-button:vertical:start:increment,
+::-webkit-scrollbar-button:vertical:end:decrement,
+::-webkit-scrollbar-button:horizontal:start:increment,
+::-webkit-scrollbar-button:horizontal:end:decrement { display: none; }
+
+/* ---- expanded state: pointer anywhere inside the scrolling element ---- */
+*:hover::-webkit-scrollbar-thumb {
+  background-color: var(--sb-thumb-strong);
+  border-width: var(--sb-inset-hover);
+}
+*:hover::-webkit-scrollbar-track { background-color: var(--sb-track); }
+*:hover::-webkit-scrollbar-button { background-color: var(--sb-track); }
+*:hover::-webkit-scrollbar-button:vertical:start:decrement { background-image: var(--sb-arrow-up); }
+*:hover::-webkit-scrollbar-button:vertical:end:increment { background-image: var(--sb-arrow-down); }
+*:hover::-webkit-scrollbar-button:horizontal:start:decrement { background-image: var(--sb-arrow-left); }
+*:hover::-webkit-scrollbar-button:horizontal:end:increment { background-image: var(--sb-arrow-right); }
+
+/* ---- pointer on the thumb / arrows: darken, then darken again on press ---- */
+::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
+::-webkit-scrollbar-thumb:active { background-color: var(--sb-thumb-active); }
+::-webkit-scrollbar-button:hover { background-color: var(--sb-btn-hover-bg); }
+::-webkit-scrollbar-button:active { background-color: var(--sb-btn-active-bg); }
+
+/* the window-inactive rail stays quiet, like Win11 */
+::-webkit-scrollbar-thumb:window-inactive { background-color: var(--sb-thumb); }
+
+/* compact tier: narrower gutter, no arrows — flyouts and small embedded lists.
+   Everything else (file view, nav pane, details pane, dialog bodies) keeps the
+   full 16px Explorer scrollbar with end arrows. */
+.menu-scroll,
+.nr-autocomplete,
+.ow-list,
+.ops-fail-list {
+  --sb-size: 12px;
+  --sb-inset: 4px;
+  --sb-inset-hover: 2px;
+  --sb-btn-h: 0px;
+}
+
+/* ============================================================
+   Reduced motion: kill the hover/press transitions and entrance
+   animations, keep genuine progress indicators spinning.
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; }
+  .menu, .dlg, .dlg-overlay, .ops-card, .nr-shake { animation: none !important; }
+}

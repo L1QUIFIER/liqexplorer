@@ -9,6 +9,7 @@
 
 import type { AppCandidate, FileEntry, Place, ViewMode } from '../../shared/types'
 import { sortKeysFor } from '../../shared/sort'
+import { isArchiveName, archiveStem } from '../../shared/archive'
 import { app, liq, Tab } from '../core/app'
 import { actions } from '../core/actions'
 import { showMenu } from './menu'
@@ -45,7 +46,17 @@ const I = {
 
 // ---------- shared helpers ----------
 
-const ARCHIVE_RE = /\.(zip|7z|rar|tar|gz|bz2|xz|tgz)$/i
+/** "Extract All..." — pick a destination, defaulting to <archive>/ like Explorer */
+async function extractAll(tab: Tab, entry: FileEntry): Promise<void> {
+  const suggested = `${tab.path}/${archiveStem(entry.name)}`
+  app.emit('show-prompt', {
+    title: 'Extract Compressed (Zipped) Folders',
+    message: 'Files will be extracted to this folder:',
+    value: suggested,
+    okLabel: 'Extract',
+    onOk: (dest: string) => { void actions.extract(tab, 'to', dest) },
+  })
+}
 
 const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
   { mode: 'extra-large', label: 'Extra large icons', shortcut: 'Ctrl+Shift+1' },
@@ -315,19 +326,24 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
     // -- single file --
     let apps: AppCandidate[] = []
     try { apps = await liq.listAppsFor(single.mime) } catch { /* menu still works without */ }
-    const isArchive = ARCHIVE_RE.test(single.name)
+    const isArchive = isArchiveName(single.name)
     const fav = await isFavorite(single.path)
     items = [
       { label: 'Open', onClick: () => { void actions.open(tab) } },
       { label: 'Open with', submenu: openWithSubmenu(single, apps) },
       { separator: true },
       fav
-        ? { label: 'Remove from Favorites', onClick: () => { void liq.invoke('removeFavorite', [single.path]) } }
-        : { label: 'Add to Favorites', onClick: () => { void liq.invoke('addFavorite', [single.path]) } },
+        ? { label: 'Remove from Favorites', onClick: () => app.emit('remove-from-favorites', [single.path]) }
+        : { label: 'Add to Favorites', onClick: () => app.emit('add-to-favorites', [single.path]) },
       { separator: true },
       ...(isArchive ? [
-        { label: 'Extract All...', onClick: () => { void actions.extract(tab) } },
-        { label: 'Extract here', onClick: () => { void actions.extract(tab) } },
+        { label: 'Extract All...', onClick: () => { void extractAll(tab, single) } },
+        { label: 'Extract here', onClick: () => { void actions.extract(tab, 'here') } },
+        {
+          label: `Extract to ${archiveStem(single.name)}\\`,
+          onClick: () => { void actions.extract(tab, 'named') },
+        },
+        { label: 'Test archive', onClick: () => { void liq.invoke('testArchive', single.path) } },
       ] : []),
       { label: 'Compress to ZIP file', onClick: () => { void actions.compress(tab) } },
       { separator: true },

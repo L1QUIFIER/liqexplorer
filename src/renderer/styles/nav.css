@@ -1,5 +1,5 @@
 /* Navigation pane — Win11 Explorer left rail (owned by the nav-pane agent).
-   Metrics per */
+   Metrics per docs/research/research-layout-chrome.md §6. */
 
 #navpane {
   --nav-indent: 12px;
@@ -22,12 +22,16 @@
   border-radius: var(--radius);
   position: relative;
   white-space: nowrap;
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 .nav-row:hover { background: var(--bg-hover); }
-.nav-row:active { background: var(--bg-active); }
+.nav-row:active { background: var(--bg-press); }
 
 /* current-location indicator: 3px accent bar + subtle fill */
-.nav-row.current { background: var(--bg-active); }
+.nav-row.current { background: var(--bg-hover-strong); }
+.nav-row.current:hover { background: var(--bg-active); }
+.nav-row.current:active { background: var(--bg-press); }
 .nav-row.current::before {
   content: '';
   position: absolute;
@@ -49,6 +53,7 @@
 
 /* ---- chevrons (hover-revealed, 100ms rotate) ---- */
 .nav-chevron {
+  position: relative;
   width: 16px;
   height: 16px;
   flex: none;
@@ -57,14 +62,28 @@
   justify-content: center;
   color: var(--text-secondary);
   border-radius: 2px;
+  cursor: default;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
+}
+/* the glyph is 16px but the target (and its hover fill) is 24px, so it is
+   easy to hit and obvious once hit */
+.nav-chevron::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: var(--radius);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 #navpane:hover .nav-chevron,
+.nav-node.expanded > .nav-row .nav-chevron,
 .nav-chevron.loading { opacity: 1; }
 .nav-chevron.empty { visibility: hidden; }
-.nav-chevron:hover { color: var(--text-primary); }
-.nav-chevron svg { transition: transform 0.1s ease; }
+.nav-chevron:hover { color: var(--text-primary); opacity: 1; }
+.nav-chevron:hover::before { background: var(--bg-hover-strong); }
+.nav-chevron:active::before { background: var(--bg-press); }
+.nav-chevron svg { position: relative; transition: transform var(--dur-fast) var(--ease-fluent); }
 .nav-node.expanded > .nav-row .nav-chevron svg { transform: rotate(90deg); }
 
 /* ---- mini loading spinner (replaces the chevron while listing) ---- */
@@ -95,11 +114,16 @@
   justify-content: center;
   color: var(--text-secondary);
   border-radius: var(--radius);
+  cursor: default;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) var(--ease-fluent),
+              background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.nav-row:hover .nav-pin { opacity: 1; }
-.nav-pin:hover { background: var(--bg-active); color: var(--text-primary); }
+.nav-row:hover .nav-pin,
+.nav-pin:focus-visible { opacity: 1; }
+.nav-pin:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.nav-pin:active { background: var(--bg-press); color: var(--text-primary); }
 
 /* ---- drive capacity bar (4px under the label; red when >90% used) ---- */
 .nav-labelcol {
@@ -143,10 +167,41 @@
   margin: 8px 12px;
 }
 
-/* ---- splitter ---- */
+/* ---- splitter ----
+   6px grab strip: invisible at rest, a 2px accent rule + a centred grip pill
+   on hover so the drag target is obvious, and it stays lit while dragging. */
 #navpane-splitter {
+  position: relative;
   background: transparent;
-  transition: background 0.12s ease;
+  cursor: col-resize;
 }
-#navpane-splitter:hover,
-#navpane-splitter.dragging { background: var(--accent); }
+#navpane-splitter::before,
+#navpane-splitter::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  border-radius: 2px;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity var(--dur-fast) var(--ease-fluent);
+  pointer-events: none;
+}
+/* full-height rule */
+#navpane-splitter::before {
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+/* grip pill in the middle */
+#navpane-splitter::after {
+  top: 50%;
+  width: 4px;
+  height: 28px;
+  margin-top: -14px;
+  background: var(--accent);
+}
+#navpane-splitter:hover::before,
+#navpane-splitter:hover::after { opacity: 0.55; }
+#navpane-splitter.dragging::before,
+#navpane-splitter.dragging::after { opacity: 1; }

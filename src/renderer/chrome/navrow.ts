@@ -19,6 +19,7 @@ interface Crumb { label: string; path: string; name: string }
 function normPath(p: string): string { return p.replace(/\/+$/, '') || '/' }
 
 function labelForPath(path: string): string {
+  if (path === 'home://') return 'Home'
   if (path === 'trash://') return 'Recycle Bin'
   if (path === 'computer://') return 'This PC'
   const n = normPath(path)
@@ -28,6 +29,7 @@ function labelForPath(path: string): string {
 }
 
 function crumbsFor(path: string): Crumb[] {
+  if (path === 'home://') return [{ label: 'Home', path: 'home://', name: 'Home' }]
   if (path === 'trash://') return [{ label: 'Recycle Bin', path: 'trash://', name: 'Recycle Bin' }]
   if (path === 'computer://') return [{ label: 'This PC', path: 'computer://', name: 'This PC' }]
   if (path.includes('://')) return [{ label: path, path, name: path }]
@@ -51,6 +53,7 @@ function crumbsFor(path: string): Crumb[] {
 }
 
 function locIconFor(t: Tab): string {
+  if (t.path === 'home://') return 'go-home,user-home,folder-home,folder'
   if (t.path === 'trash://') return 'user-trash,folder'
   if (t.path === 'computer://') return 'computer,drive-harddisk,folder'
   if (normPath(t.path) === normPath(app.homePath)) return 'user-home,folder-home,folder'

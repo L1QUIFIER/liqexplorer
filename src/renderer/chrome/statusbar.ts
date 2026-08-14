@@ -26,7 +26,8 @@ export function mountStatusBar(root: HTMLElement): void {
     const t = app.activeTab
     if (!t) return
     const n = t.rows.length
-    count.textContent = `${n} item${n === 1 ? '' : 's'}`
+    // Home has no item list of its own — "0 items" would just look broken
+    count.textContent = t.path === 'home://' ? '' : `${n} item${n === 1 ? '' : 's'}`
     const s = t.selectedEntries()
     if (s.length) {
       const bytes = s.reduce((a, e) => a + (e.size > 0 ? e.size : 0), 0)

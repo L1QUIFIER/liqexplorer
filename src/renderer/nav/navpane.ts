@@ -1,10 +1,12 @@
 // Navigation pane — Win11 Explorer left rail.
 //
-// Structure (top to bottom): Home · pinned Quick-access entries (user dirs +
-// pinned places, pin glyph on hover) · ── · This PC (expandable; children are
-// drives, each drive a lazy directory-tree root with optional capacity bar) ·
-// ── · Network (network drives + gvfs places, also tree roots) · ── ·
-// Recycle Bin.
+// Structure (top to bottom): Home (the home:// landing page) · Quick access
+// (collapsible header over the pinned entries: the home folder, user dirs and
+// pinned places, pin glyph on hover — the header is what tells the user where
+// a "Pin to Quick access" actually landed) · ── · This PC (expandable;
+// children are drives, each drive a lazy directory-tree root with optional
+// capacity bar) · ── · Network (network drives + gvfs places, also tree roots)
+// · ── · Recycle Bin.
 //
 // Flagship behavior: "Expand to open folder" — on every navigation of the
 // active tab (when settings.navExpandToCurrent), the tree expands along the
@@ -15,7 +17,7 @@
 // abort, and NO auto-collapsing ever — a user's manual collapse wins until
 // the next navigation.
 import type { AppSettings, FileEntry, Place } from '../../shared/types'
-import { app, liq } from '../core/app'
+import { app, liq, HOME_URI } from '../core/app'
 import type { Tab } from '../core/app'
 
 const MIN_W = 120
@@ -37,7 +39,7 @@ const PIN_SVG =
   'L4.75 10.2 2.54 7.99a1 1 0 0 1 0-1.41l.33-.33a1 1 0 0 1 .83-.29l2.35.31L8.33 3.99l-.15-.66' +
   'a1 1 0 0 1 .27-.93l1.15-.7z"/></svg>'
 
-type SectionId = 'thispc' | 'network'
+type SectionId = 'quick' | 'thispc' | 'network'
 
 interface TreeNode {
   path: string                       // normalized, no trailing slash (except '/')
@@ -486,7 +488,10 @@ export function mountNavPane(root: HTMLElement): void {
     return sec
   }
 
-  function addFlatRow(place: Place, opts: { pin?: boolean; parent?: HTMLElement; depth?: number } = {}): void {
+  function addFlatRow(
+    place: Place,
+    opts: { pin?: boolean; parent?: HTMLElement; depth?: number; noContext?: boolean } = {},
+  ): void {
     const depth = opts.depth ?? 0
     const row = document.createElement('div')
     row.className = 'nav-row nav-flat'
@@ -505,7 +510,7 @@ export function mountNavPane(root: HTMLElement): void {
       row.appendChild(pin)
     }
     wireRowNav(row, place.path)
-    wireContextMenu(row, place.path, place)
+    if (!opts.noContext) wireContextMenu(row, place.path, place)
     if (place.path === 'trash://') makeDropTarget(row, place.path, { trash: true })
     else if (place.path && !place.path.includes('://')) makeDropTarget(row, place.path, {})
     flatRows.push({ path: place.path, row })
@@ -537,14 +542,28 @@ export function mountNavPane(root: HTMLElement): void {
     sections.clear()
     const places: Place[] = app.places ?? []
 
-    // Home
-    const home: Place = places.find((p) => p.kind === 'home')
-      ?? { id: 'home', kind: 'home', label: 'Home', path: app.homePath, icons: ['user-home', 'go-home', 'folder-home'] }
-    addFlatRow(home)
+    // Home — the home:// landing page (Quick access / Favorites / Recent)
+    addFlatRow(
+      { id: 'homepage', kind: 'home', label: 'Home', path: HOME_URI, icons: ['go-home', 'user-home', 'folder-home'] },
+      { noContext: true },     // nothing in the place menu applies to a virtual page
+    )
 
-    // pinned quick-access entries
+    // Quick access — the pinned entries, under a header that names them:
+    // without it a "Pin to Quick access" looks like it did nothing.
+    const secQuick = makeSection('quick', 'Quick access',
+      ['user-bookmarks', 'bookmarks', 'folder'], null)
+    const homeDir: Place = places.find((p) => p.kind === 'home')
+      ?? { id: 'home', kind: 'home', label: 'Home', path: app.homePath, icons: ['user-home', 'folder-home'] }
+    addFlatRow(
+      // labelled like Windows' user-profile folder, so it can't be confused
+      // with the Home page row above it
+      { ...homeDir, label: app.homePath.split('/').filter(Boolean).pop() || homeDir.label },
+      { parent: secQuick.childrenEl, depth: 1 },
+    )
     for (const p of places) {
-      if (p.kind === 'user-dir' || p.kind === 'pinned') addFlatRow(p, { pin: true })
+      if (p.kind === 'user-dir' || p.kind === 'pinned') {
+        addFlatRow(p, { pin: true, parent: secQuick.childrenEl, depth: 1 })
+      }
     }
     addSep()
 

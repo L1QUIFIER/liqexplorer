@@ -31,6 +31,9 @@ declare global {
 }
 export const liq = window.liq
 
+/** The Home page (Quick access / Favorites / Recent) — rendered by views/home.ts. */
+export const HOME_URI = 'home://'
+
 let nextTabId = 1
 
 export class Tab {
@@ -74,10 +77,11 @@ export class Tab {
       this.historyIndex = this.history.length - 1
     }
     this.path = path
-    this.title = path === 'trash://' ? 'Recycle Bin'
-      : path === 'computer://' ? 'This PC'
-        : path === this.app.homePath ? 'Home'
-          : (path.split('/').filter(Boolean).pop() ?? path)
+    this.title = path === HOME_URI ? 'Home'
+      : path === 'trash://' ? 'Recycle Bin'
+        : path === 'computer://' ? 'This PC'
+          : path === this.app.homePath ? 'Home'
+            : (path.split('/').filter(Boolean).pop() ?? path)
     this.searchQuery = null
     this.error = null
     this.app.emit('tab-navigated', this)
@@ -127,6 +131,14 @@ export class Tab {
     // (covers the virtual-path early returns too), and stop the old watch
     if (this.listReqId) { liq.cancelList(this.listReqId); this.listReqId = 0 }
     if (this.watchId) { liq.unwatchDir(this.watchId); this.watchId = 0 }
+    if (this.path === HOME_URI) {
+      // the Home page owns its own data (favorites/recent) — nothing to list or watch
+      this.loading = false
+      this.recompute()
+      this.app.emit('tab-listing', this)
+      this.app.emit('tab-loading', this)
+      return 0
+    }
     if (this.path === 'trash://') {
       const items = await liq.listTrash()
       if (gen !== this.listGen) return 0
@@ -372,9 +384,18 @@ export class App {
     liq.on(PUSH.undoChanged, (u: UndoInfo) => { this.undoInfo = u; this.emit('undo-changed', u) })
     liq.on(PUSH.openPathRequest, (d: { path: string }) => this.newTab(d.path))
 
+    // openTo: 'home' = the Home page, 'homeFolder' = ~, 'lastSession' (v1.1:
+    // falls back to ~), or a literal path. A path on argv always wins.
     const q = new URLSearchParams(location.search)
-    const openTo = q.get('open') || (this.settings.openTo === 'home' ? this.homePath : this.settings.openTo === 'lastSession' ? this.homePath : this.settings.openTo)
-    await this.newTab(openTo || this.homePath)
+    await this.newTab(q.get('open') || this.startLocation())
+  }
+
+  /** where a fresh tab (and the first window) lands, per settings.openTo */
+  startLocation(): string {
+    const to = this.settings.openTo
+    if (to === 'home') return HOME_URI
+    if (to === 'homeFolder' || to === 'lastSession') return this.homePath
+    return to || HOME_URI
   }
 
   async newTab(path?: string, background = false): Promise<Tab> {
@@ -382,7 +403,8 @@ export class App {
     this.tabs.push(tab)
     if (!background) this.activeTabIndex = this.tabs.length - 1
     this.emit('tabs-changed')
-    await tab.navigate(path ?? this.homePath)
+    // a new tab opens wherever the app is configured to start (Home by default)
+    await tab.navigate(path ?? this.startLocation())
     return tab
   }
 

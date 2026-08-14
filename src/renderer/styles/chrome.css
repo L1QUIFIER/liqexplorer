@@ -1,5 +1,5 @@
 /* Window chrome: titlebar/tabs, nav row (breadcrumbs, search), command bar,
-   status bar. Metrics per */
+   status bar. Metrics per docs/research/research-layout-chrome.md. */
 
 /* component-scoped extras */
 :root {
@@ -48,12 +48,16 @@
   font-size: var(--fs-caption);
   -webkit-app-region: no-drag;
   user-select: none;
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .tb-tab.active {
   background: var(--tab-active-bg);
   color: var(--text-primary);
 }
-.tb-tab:not(.active):hover { background: var(--bg-hover); }
+.tb-tab:not(.active):hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-tab:not(.active):active { background: var(--bg-press); }
 .tb-tab.dragging {
   z-index: 5;
   opacity: 0.92;
@@ -94,11 +98,14 @@
   justify-content: center;
   border-radius: var(--radius);
   color: inherit;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .tb-tab:hover .tb-tab-close,
-.tb-tab.active .tb-tab-close { visibility: visible; }
-.tb-tab-close:hover { background: var(--bg-hover); }
-.tb-tab-close:active { background: var(--bg-active); }
+.tb-tab.active .tb-tab-close,
+.tb-tab-close:focus-visible { visibility: visible; }
+.tb-tab-close:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.tb-tab-close:active { background: var(--bg-press); }
 
 .tb-newtab {
   width: 30px;
@@ -111,9 +118,10 @@
   border-radius: var(--radius);
   color: var(--text-primary);
   -webkit-app-region: no-drag;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.tb-newtab:hover { background: var(--bg-hover); }
-.tb-newtab:active { background: var(--bg-active); }
+.tb-newtab:hover { background: var(--bg-hover-strong); }
+.tb-newtab:active { background: var(--bg-press); }
 
 .tb-drag { flex: 1; align-self: stretch; }
 
@@ -131,9 +139,11 @@
   justify-content: center;
   color: var(--text-primary);
   border-radius: 0;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.tb-caption button:hover { background: var(--bg-hover); }
-.tb-caption button:active { background: var(--bg-active); }
+.tb-caption button:hover { background: var(--bg-hover-strong); }
+.tb-caption button:active { background: var(--bg-press); }
 .tb-caption .tb-close:hover { background: var(--caption-close-bg); color: #fff; }
 .tb-caption .tb-close:active { background: var(--caption-close-bg-active); color: rgba(255, 255, 255, 0.7); }
 
@@ -156,10 +166,12 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-primary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .nr-btn:hover:not(:disabled) { background: var(--bg-hover); }
-.nr-btn:active:not(:disabled) { background: var(--bg-active); }
-.nr-btn:disabled { color: var(--text-disabled); opacity: 0.9; }
+.nr-btn:active:not(:disabled) { background: var(--bg-press); }
+.nr-btn:disabled { color: var(--text-disabled); }
 
 .nr-address {
   flex: 1;
@@ -172,8 +184,12 @@
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-fluent),
+              background-color var(--dur-fast) var(--ease-fluent);
 }
-.nr-address.editing { border-color: var(--accent); }
+.nr-address:hover { border-color: var(--stroke-strong); }
+.nr-address.editing,
+.nr-address:focus-within { border-color: var(--accent); }
 
 .nr-loc {
   width: 32px;
@@ -184,8 +200,10 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--radius);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 .nr-loc:hover { background: var(--bg-hover); }
+.nr-loc:active { background: var(--bg-press); }
 .nr-loc-icon { width: 16px; height: 16px; }
 
 .nr-crumbs {
@@ -204,6 +222,8 @@
   height: 28px;
   flex: none;
   border-radius: var(--radius);
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
 /* paired hover: whole segment lights up, hovered half a step stronger */
 .crumb:hover { background: var(--bg-hover); }
@@ -218,9 +238,10 @@
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.crumb-btn:hover { background: var(--bg-hover); }
-.crumb-btn:active { background: var(--bg-active); }
+.crumb-btn:hover { background: var(--bg-hover-strong); }
+.crumb-btn:active { background: var(--bg-press); }
 .crumb-chev {
   width: 22px;
   height: 28px;
@@ -230,11 +251,14 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
-.crumb-chev:hover { background: var(--bg-hover); color: var(--text-primary); }
-.crumb-chev:active { background: var(--bg-active); }
+.crumb-chev:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.crumb-chev:active { background: var(--bg-press); }
+.crumb-chev.open { background: var(--bg-active); color: var(--text-primary); }
 .crumb-chev.open svg { transform: rotate(90deg); }
-.crumb-chev svg { transition: transform 0.1s ease; }
+.crumb-chev svg { transition: transform var(--dur-fast) var(--ease-fluent); }
 .crumb-overflow { margin: 0 2px; color: var(--text-primary); }
 
 .nr-search-crumb {
@@ -259,8 +283,10 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--danger);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.nr-search-cancel:hover { background: var(--bg-hover); }
+.nr-search-cancel:hover { background: var(--bg-hover-strong); }
+.nr-search-cancel:active { background: var(--bg-press); }
 
 .nr-edit {
   flex: 1;
@@ -302,9 +328,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: default;
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.nr-ac-item.sel,
 .nr-ac-item:hover { background: var(--bg-hover); }
+.nr-ac-item.sel { background: var(--bg-active); }
+.nr-ac-item.sel:hover,
+.nr-ac-item:active { background: var(--bg-press); }
 .nr-ac-item span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -321,7 +351,9 @@
   background: var(--bg-content);
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
+  transition: border-color var(--dur-fast) var(--ease-fluent);
 }
+.nr-search-wrap:hover { border-color: var(--stroke-strong); }
 .nr-search-wrap:focus-within { border-color: var(--accent); }
 .nr-search-glyph {
   display: flex;
@@ -349,8 +381,10 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--danger);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
 }
-.nr-search-clear:hover { background: var(--bg-hover); }
+.nr-search-clear:hover { background: var(--bg-hover-strong); }
+.nr-search-clear:active { background: var(--bg-press); }
 
 /* ===================== command bar ===================== */
 
@@ -380,10 +414,12 @@
   border-radius: var(--radius);
   color: var(--text-primary);
   white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .cb-drop:hover:not(:disabled) { background: var(--bg-hover); }
-.cb-drop:active:not(:disabled) { background: var(--bg-active); }
-.cb-drop:disabled { color: var(--text-disabled); }
+.cb-drop:active:not(:disabled) { background: var(--bg-press); }
+.cb-drop.open { background: var(--bg-active); }
 
 .cb-icon {
   width: 36px;
@@ -394,10 +430,25 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-primary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .cb-icon:hover:not(:disabled) { background: var(--bg-hover); }
-.cb-icon:active:not(:disabled) { background: var(--bg-active); }
-.cb-icon:disabled { color: var(--text-disabled); }
+.cb-icon:active:not(:disabled) { background: var(--bg-press); }
+.cb-icon.open { background: var(--bg-active); }
+
+/* disabled commands are inert: dimmed glyph, no hover/press response */
+.cb-drop:disabled,
+.cb-icon:disabled {
+  color: var(--text-disabled);
+  background: transparent;
+}
+.cb-drop:disabled img,
+.cb-icon:disabled img,
+.nr-btn:disabled img {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
 
 .cb-sep {
   width: 1px;
@@ -433,9 +484,13 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-secondary);
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent);
 }
 .sb-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sb-toggle:active { background: var(--bg-press); color: var(--text-primary); }
 .sb-toggle.active { background: var(--bg-active); color: var(--text-primary); }
+.sb-toggle.active:hover { background: var(--bg-press); }
 
 /* ===================== shared: focus rings ===================== */
 

@@ -1,4 +1,4 @@
-// Home page — Win11's default landing view (docs/research/research-layout-chrome.md §7).
+// Home page — Win11's default landing view.
 //
 // Three collapsible sections: Quick access (pinned folders, the same set the
 // nav pane mirrors), Favorites (pinned FILES) and Recent (recently used files

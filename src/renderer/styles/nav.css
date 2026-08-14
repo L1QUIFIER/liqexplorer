@@ -1,5 +1,5 @@
 /* Navigation pane — Win11 Explorer left rail (owned by the nav-pane agent).
-   Metrics per docs/research/research-layout-chrome.md §6. */
+   Metrics for Win11 Explorer chrome parity */
 
 #navpane {
   --nav-indent: 12px;

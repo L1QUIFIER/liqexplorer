@@ -11,7 +11,7 @@
 // Flagship behavior: "Expand to open folder" — on every navigation of the
 // active tab (when settings.navExpandToCurrent), the tree expands along the
 // ancestor chain to the current folder, highlights it and scrolls it into
-// view. The walk follows Thunar's model (docs/research/research-prior-art.md
+// view. The walk follows Thunar's model (Win11 Explorer parity notes
 // §8a): lazy per-branch loads that are awaited (not re-issued) while in
 // flight, one forced re-list retry when a segment is missing, a 5 s total
 // abort, and NO auto-collapsing ever — a user's manual collapse wins until

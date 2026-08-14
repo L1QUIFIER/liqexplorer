@@ -1,6 +1,6 @@
 /* ============================================================
    Win11 flyout menus (rendered by src/renderer/menus/menu.ts)
-   Metrics per docs/research/research-layout-chrome.md:
+   Metrics for Win11 Explorer chrome parity
    flyout bg, 8px radius, flyout shadow, 4px padding, 32px items,
    16px leading glyph column, right-aligned shortcut column.
    ============================================================ */

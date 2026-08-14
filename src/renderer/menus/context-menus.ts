@@ -1,4 +1,4 @@
-// Every context menu in the app, built per docs/research/research-context-menus.md
+// Every context menu in the app, built for Win11 Explorer chrome parity
 // (Win11 modern-menu item lists, in exact order). mountMenus() listens on app
 // events emitted by the views/nav/titlebar components:
 //   'background-context' { x, y }                       folder background

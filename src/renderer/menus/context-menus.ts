@@ -447,7 +447,21 @@ function showTabMenu(d: TabCtx): void {
   const t = app.tabs[i]
   if (!t) return
   showMenu([
-    { label: 'Duplicate tab', onClick: () => { void app.newTab(t.path) } },
+    {
+      label: 'Duplicate tab',
+      // Explorer puts the copy immediately right of its source, not at the end
+      onClick: () => {
+        void app.newTab(t.path, true).then(nt => {
+          const from = app.tabs.indexOf(nt)
+          if (from < 0 || from === i + 1) return
+          const active = app.tabs[app.activeTabIndex]
+          app.tabs.splice(from, 1)
+          app.tabs.splice(i + 1, 0, nt)
+          app.activeTabIndex = app.tabs.indexOf(active)
+          app.emit('tabs-changed')
+        })
+      },
+    },
     { separator: true },
     { label: 'Close tab', shortcut: 'Ctrl+W', onClick: () => app.closeTab(i) },
     {

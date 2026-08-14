@@ -26,7 +26,8 @@ Version targets: **v1** = first testable build, **v1.x** = fast follows,
 
 ## Context menus 
 - [~] v1 Background + item + multi + trash + navpane + tab menus with icon rows
-- [ ] v1.x Send to submenu; Open file location (search results); right-drag menu
+- [x] v1 Right-drag menu (Copy/Move/Create shortcuts here, default bolded, volume-aware)
+- [ ] v1.x Send to submenu; Open file location (search results)
 - [ ] v1.x .nemo_action loader (keeps mintstick/warpinator/etc. actions) — big interop win
 - [ ] v2 New submenu from ~/Templates registry parity; image verbs (Set as background, Rotate)
 
@@ -78,3 +79,21 @@ Version targets: **v1** = first testable build, **v1.x** = fast follows,
 - [ ] v1.x Extract All… destination-picker wizard (currently same as Extract here)
 - [ ] v1.x Search result "results truncated" indicator when the 10k cap hits (needs a flag on
  SearchChunk)
+
+## Added 2026-08-13 (icons, menus, sorting, right-drag)
+- [x] App icon (SVG + 8 PNG sizes, Liq family style); `bin/install-app.sh` installs the icon
+      and menu entry WITHOUT changing the default file manager
+- [x] Sort by / Group by expose every supported key (Name, Date modified, Date created,
+      Date accessed, Type, Size, File extension; Recycle Bin: Original location, Date deleted),
+      from one shared list also used by the details column chooser
+- [x] Right-drag menu; left-drag modifiers (Ctrl copy / Shift move / Alt shortcut) and
+      volume-aware default effect
+- [x] Nav-pane empty-area menu (Expand to open folder, Show hidden items, Hide navigation pane)
+- [ ] v1.x Friendly "Type" names from shared-mime-info comments ("PNG image" rather than
+      "PNG File") — Group by Type currently buckets by extension-derived labels
+- [ ] v1.x Right-drag onto the *desktop* / other apps (X11 XDND right-button drags are
+      not deliverable from Chromium; would need a native drag helper)
+- [ ] v1.x "More..." (Choose Details) dialog for the full column set
+- KNOWN: Electron does not populate _NET_WM_ICON on X11 (verified with xprop for both the
+      BrowserWindow icon option and win.setIcon), so alt-tab/window-list icons come from the
+      installed .desktop entry matched on WM_CLASS=liqexplorer

@@ -238,8 +238,13 @@ async function computePlaces(): Promise<Place[]> {
     places.push({ id: `user-dir:${key}`, kind: 'user-dir', label, path: p, icons: [icon, 'folder'] })
   }
 
-  // (b) pinned GTK bookmarks
+  // (b) pinned GTK bookmarks. A bookmark for a folder that is already an XDG
+  // user dir (very common — GTK adds them) must not produce a second row: mark
+  // the existing entry pinned instead, so it keeps its proper icon and still
+  // offers "Unpin from Quick access".
   for (const b of readBookmarks()) {
+    const existing = places.find(p => p.path === b.path)
+    if (existing) { existing.pinned = true; continue }
     places.push({
       id: `pin:${b.path}`, kind: 'pinned', label: b.label, path: b.path,
       icons: ['folder'], pinned: true,

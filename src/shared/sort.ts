@@ -38,6 +38,9 @@ export function sortKeysFor(path: string): SortKeyInfo[] {
 
 export function typeLabelFor(e: FileEntry): string {
   if (e.isDir) return 'File folder'
+  // shared-mime-info name ("PNG image"); Explorer-style fallback when the type
+  // has no description (unregistered extensions)
+  if (e.typeLabel) return e.typeLabel
   if (!e.ext) return 'File'
   return e.ext.toUpperCase() + ' File'
 }

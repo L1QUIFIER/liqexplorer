@@ -165,6 +165,35 @@ const ARCHIVE_HINT = /zip|tar|7z|rar|archive|compress|bzip|gzip|lzma|[-.]xz|zstd
 const EXEC_HINT = /x-(pie-)?executable|x-sharedlib|x-msdos-program|x-ms-dos-executable|x-msdownload/
 
 /** freedesktop icon names for a mime type, best-first. */
+// ---------------------------------------------------------------- type names
+//
+// The human name for a type ("PNG image", not "PNG File") is the <comment> in
+// /usr/share/mime/<type>.xml. Explorer shows the registry's friendly name in
+// its Type column and groups by it; this is the freedesktop equivalent. Read
+// lazily and cached: a listing only ever touches a few dozen distinct types.
+
+const labelCache = new Map<string, string | undefined>()
+
+/** first locale-less <comment> of the type's XML description, if any */
+export function mimeLabel(mime: string): string | undefined {
+  const hit = labelCache.get(mime)
+  if (hit !== undefined || labelCache.has(mime)) return hit
+  let label: string | undefined
+  for (const base of [path.join(os.homedir(), '.local/share/mime'), '/usr/share/mime']) {
+    let xml: string
+    try { xml = fs.readFileSync(path.join(base, mime + '.xml'), 'utf8') } catch { continue }
+    // the untranslated comment comes first; xml:lang variants follow
+    const m = /<comment>([^<]+)<\/comment>/.exec(xml)
+    if (m) {
+      label = m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      break
+    }
+  }
+  labelCache.set(mime, label)
+  return label
+}
+
 export function iconsForMime(mime: string): string[] {
   ensureLoaded()
   const icons: string[] = [mime.replace('/', '-')]

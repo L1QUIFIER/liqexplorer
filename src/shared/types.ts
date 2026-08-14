@@ -26,6 +26,8 @@ export interface FileEntry {
   btime?: number        // birth time if the fs provides it
   atime?: number        // last access, epoch ms (absent on fast-path listings)
   mime: string          // e.g. 'text/plain', 'inode/directory'
+  /** human type name from shared-mime-info ("PNG image"); falls back to '<EXT> File' */
+  typeLabel?: string
   /** freedesktop icon names, best-first (renderer resolves via liqicon://) */
   icons: string[]
   hidden: boolean

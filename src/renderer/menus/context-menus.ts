@@ -64,6 +64,14 @@ const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
 interface ConfirmOpts { title: string; message: string; okLabel: string; danger?: boolean; onOk: () => void }
 function showConfirm(o: ConfirmOpts): void { app.emit('show-confirm', o) }
 
+/** favorites live in main (favorites.json); the menu asks per open, like templates */
+async function isFavorite(path: string): Promise<boolean> {
+  try {
+    const list = await liq.invoke('listFavorites') as { path: string }[]
+    return Array.isArray(list) && list.some(f => f.path === path)
+  } catch { return false }        // favorites unavailable: just offer to add
+}
+
 function isPinned(path: string): boolean {
   return app.places.some(p => p.path === path && (p.pinned === true || p.kind === 'pinned'))
 }
@@ -308,9 +316,14 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
     let apps: AppCandidate[] = []
     try { apps = await liq.listAppsFor(single.mime) } catch { /* menu still works without */ }
     const isArchive = ARCHIVE_RE.test(single.name)
+    const fav = await isFavorite(single.path)
     items = [
       { label: 'Open', onClick: () => { void actions.open(tab) } },
       { label: 'Open with', submenu: openWithSubmenu(single, apps) },
+      { separator: true },
+      fav
+        ? { label: 'Remove from Favorites', onClick: () => { void liq.invoke('removeFavorite', [single.path]) } }
+        : { label: 'Add to Favorites', onClick: () => { void liq.invoke('addFavorite', [single.path]) } },
       { separator: true },
       ...(isArchive ? [
         { label: 'Extract All...', onClick: () => { void actions.extract(tab) } },

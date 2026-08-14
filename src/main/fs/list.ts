@@ -8,7 +8,7 @@ import * as os from 'node:os'
 import type { WebContents } from 'electron'
 import { PUSH } from '../../shared/ipc'
 import type { DirChunk, FileEntry, ListOptions } from '../../shared/types'
-import { mimeForName, iconsForMime, folderIcons, xdgUserDirs } from './mime'
+import { mimeForName, mimeLabel, iconsForMime, folderIcons, xdgUserDirs } from './mime'
 
 const CHUNK = 2000
 const STAT_POOL = 48
@@ -100,6 +100,9 @@ export async function entryFor(p: string, name: string, st?: fs.Stats | null, ct
     btime: st2.birthtimeMs > 0 ? st2.birthtimeMs : undefined,
     atime: st2.atimeMs,
     mime,
+    // octet-stream's description is literally "Unknown" — less useful than
+    // Explorer's "<EXT> File" fallback, so leave it unset for those
+    typeLabel: isDir || mime === 'application/octet-stream' ? undefined : mimeLabel(mime),
     icons: isDir ? folderIcons(full) : iconsForMime(mime),
     hidden: name.startsWith('.') || (ctx?.hiddenSet?.has(name) ?? false),
     ext,

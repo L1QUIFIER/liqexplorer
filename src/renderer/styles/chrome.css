@@ -474,6 +474,14 @@
 }
 .sb-count { padding-left: 14px; white-space: nowrap; }
 .sb-sel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-warn {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42vw;
+  opacity: 0.85;
+  color: var(--text-secondary, inherit);
+}
 .sb-spacer { flex: 1; }
 .sb-toggle {
   width: 30px;

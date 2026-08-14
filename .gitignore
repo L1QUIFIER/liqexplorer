@@ -1,6 +1,7 @@
 # Dependencies / build output
 node_modules/
 dist/
+release/
 *.log
 .env*
 __pycache__/

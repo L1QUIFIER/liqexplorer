@@ -1,6 +1,6 @@
 // Status bar: item count, selection count + size; right end: Details / Large
 // thumbnails quick view toggles (Win10-heritage buttons Win11 kept).
-import { app, Tab } from '../core/app'
+import { app, Tab, liq } from '../core/app'
 import { formatSize } from '../../shared/sort'
 
 const SVG_DETAILS = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M5.5 3.5h9M5.5 8h9M5.5 12.5h9"/><path d="M2 3.5h.6M2 8h.6M2 12.5h.6"/></svg>'
@@ -10,17 +10,27 @@ export function mountStatusBar(root: HTMLElement): void {
   root.innerHTML = `
     <span class="sb-count"></span>
     <span class="sb-sel"></span>
+    <span class="sb-warn" hidden></span>
     <div class="sb-spacer"></div>
     <button class="sb-toggle sb-details" title="Display information about each item in the window" aria-label="Details view">${SVG_DETAILS}</button>
     <button class="sb-toggle sb-thumbs" title="Display items by using large thumbnails" aria-label="Large icons view">${SVG_THUMBS}</button>`
 
   const count = root.querySelector('.sb-count') as HTMLElement
   const sel = root.querySelector('.sb-sel') as HTMLElement
+  const warn = root.querySelector('.sb-warn') as HTMLElement
   const detailsBtn = root.querySelector('.sb-details') as HTMLButtonElement
   const thumbsBtn = root.querySelector('.sb-thumbs') as HTMLButtonElement
 
   detailsBtn.addEventListener('click', () => app.activeTab.setViewState({ mode: 'details' }))
   thumbsBtn.addEventListener('click', () => app.activeTab.setViewState({ mode: 'large' }))
+
+  void liq.getCapabilities?.().then((caps: { warnings?: string[] } | null) => {
+    const w = caps?.warnings?.[0]
+    if (!w) return
+    warn.hidden = false
+    warn.textContent = `| ${w}`
+    warn.title = (caps?.warnings ?? []).join('\n')
+  }).catch(() => { /* older builds */ })
 
   const render = () => {
     const t = app.activeTab

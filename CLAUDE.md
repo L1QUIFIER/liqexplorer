@@ -1,11 +1,13 @@
 # LiqExplorer — build & run rules (read before touching anything)
 
-Windows 11 File Explorer replica for Linux Mint / Cinnamon, replacing Nemo as the
-default file browser. Electron + vanilla TypeScript renderer, esbuild bundling, **no native
-npm modules** (everything OS-level goes through CLI helpers: `gio`, `gsettings`, `xdg-mime`,
-`file-roller`, `rg`, plus `helpers/clipboard-owner.py` for X11 clipboard interop).
+Windows 11 File Explorer replica for Linux (Mint/Cinnamon first-class; portable
+fallbacks for GNOME/KDE/XFCE/Arch/Fedora). Electron + vanilla TypeScript renderer,
+esbuild bundling, **no native npm modules** (OS-level via CLI helpers: `gio`,
+`gsettings`, `xdg-mime`, `rg`, `7z`, plus `helpers/clipboard-owner.py` for X11
+clipboard interop).
 
-Feature backlog: `docs/PARITY.md`.
+Feature backlog: `docs/PARITY.md`. Portability probes live in
+`src/main/platform/capabilities.ts` (soft-fail missing tools).
 
 ## CIFS / noexec share constraints (optional)
 

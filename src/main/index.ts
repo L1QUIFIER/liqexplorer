@@ -6,6 +6,7 @@ import { registerProtocols, protocolPrivileges } from './platform/protocols'
 import { initTheme } from './platform/theme'
 import { loadSettings } from './state/settings'
 import { initClipboard } from './platform/clipboard'
+import { probeCapabilities, logCapabilities } from './platform/capabilities'
 
 // Paths handed on the command line (first launch or forwarded by second
 // instance). Relative paths are resolved against cwd — the SECOND instance's
@@ -30,6 +31,8 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     await loadSettings()
+    const caps = await probeCapabilities()
+    logCapabilities(caps)
     initTheme()
     initClipboard()
     registerProtocols()

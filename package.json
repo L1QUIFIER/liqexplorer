@@ -1,19 +1,50 @@
 {
   "name": "liqexplorer",
   "version": "0.1.0",
-  "description": "Windows 11 File Explorer replica for Linux Mint / Cinnamon — LiqExplorer",
+  "description": "Windows 11-style file explorer for Linux — LiqExplorer",
   "main": "dist/main/index.js",
   "private": true,
+  "author": "L1QUIFIER",
+  "homepage": "https://github.com/L1QUIFIER/liqexplorer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/L1QUIFIER/liqexplorer.git"
+  },
   "scripts": {
     "build": "bash bin/build.sh",
     "start": "bash bin/run.sh",
     "dev": "bash bin/dev.sh",
-    "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit"
+    "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit",
+    "dist:appimage": "npm run build && electron-builder --linux AppImage"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
     "electron": "^38.2.0",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.25.9",
     "typescript": "^5.9.2"
+  },
+  "build": {
+    "appId": "app.liqexplorer",
+    "productName": "LiqExplorer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "helpers/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "System;FileTools;FileManager;",
+      "icon": "assets/icons",
+      "synopsis": "Windows 11-style file explorer for Linux",
+      "desktop": {
+        "StartupWMClass": "liqexplorer"
+      }
+    }
   }
 }

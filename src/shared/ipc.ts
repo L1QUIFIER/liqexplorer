@@ -100,6 +100,12 @@ export interface LiqApi {
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   getTheme(): Promise<'light' | 'dark'>
+  /** Host tool availability (gio, rg, 7z, Wayland notes, …). Soft-fail guide. */
+  getCapabilities(): Promise<{
+    gio: boolean; gsettings: boolean; ripgrep: boolean; python3: boolean; pythonGi: boolean
+    sevenZip: boolean; unrar: boolean; unar: boolean; udisksctl: boolean; xdgMime: boolean
+    wayland: boolean; x11Display: boolean; warnings: string[]
+  } | null>
 
   // --- windows / native ---
   newWindow(path?: string): Promise<void>

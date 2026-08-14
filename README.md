@@ -1,16 +1,40 @@
 # LiqExplorer
 
-Windows 11–style File Explorer for Linux (Mint / Cinnamon / X11).
+Windows 11–style File Explorer for Linux.
 
-Tabs, command bar, breadcrumb address bar, navigation tree, details/icon views with sort & group, Explorer-style context menus, file ops with progress/conflict/undo, and Nemo-compatible trash, clipboard, and thumbnails.
+Tabs, command bar, breadcrumb address bar, navigation tree, details/icon views with sort & group, Explorer-style context menus, file ops with progress/conflict/undo, and desktop-compatible trash, clipboard, and thumbnails (via GIO/gvfs).
 
-> **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet and is not the system default file manager. Built and tested on Linux Mint 22.3 / Cinnamon / X11.
+> **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet. Best on **X11** (Cinnamon/GNOME/XFCE/MATE). Wayland works for browsing with limited clipboard interop.
 
 ## Requirements
 
-- Linux with X11 (Wayland support is incomplete)
-- Node.js 20+
-- System tools: `gio`, `file-roller`, `ripgrep` (`rg`), `python3` + `python3-gi` (clipboard interop)
+- Linux x86_64
+- Node.js 20+ (for building from source)
+- **Required for full features:** `gio` (glib/gvfs), `python3` + GTK3 PyGObject, `ripgrep` (`rg`), `7z` (p7zip / 7-Zip)
+- Optional: `unrar` / `unar` (better RAR support), `udisksctl` (eject/power-off)
+
+### Distro packages
+
+**Arch / Manjaro**
+```bash
+sudo pacman -S nodejs npm gvfs gtk3 python-gobject ripgrep p7zip
+# optional: unrar unarchiver udisks2
+```
+
+**Fedora**
+```bash
+sudo dnf install nodejs npm gvfs gtk3 python3-gobject ripgrep p7zip p7zip-plugins
+# optional: unrar unar udisks2
+```
+
+**Debian / Ubuntu / Mint**
+```bash
+sudo apt install nodejs npm gvfs libgtk-3-0 python3-gi python3-gi-cairo \
+  gir1.2-gtk-3.0 ripgrep p7zip-full
+# optional: unrar unar udisks2
+```
+
+Missing tools soft-fail (status bar warning + console log) instead of crashing — e.g. no `rg` disables content search only.
 
 ## Try it (build from source)
 
@@ -22,17 +46,29 @@ npm run build
 npm start
 ```
 
-Nemo stays your default folder handler unless you opt in:
+Install a menu entry / desktop icon (does **not** change your default file manager):
+
+```bash
+bash bin/install-app.sh
+```
+
+Opt in as the default folder handler (reversible — restores your previous handler):
 
 ```bash
 bash bin/install-default.sh
+# undo:
+bash bin/install-default.sh --undo
 ```
 
-That writes a user `.desktop` file and sets `xdg-mime` defaults. Revert with:
+## AppImage (optional packaging)
 
 ```bash
-xdg-mime default nemo.desktop inode/directory application/x-gnome-saved-search
+npm install
+npm run build
+npm run dist:appimage
 ```
+
+Output lands in `release/`. Requires `electron-builder` (pulled as a devDependency) and typical Linux packaging tools (`fuse` / AppImage runtime on the build host).
 
 ## Develop
 
@@ -66,9 +102,16 @@ bash bin/run.sh
 | `helpers/` | Out-of-process helpers (X11 clipboard owner) |
 | `docs/PARITY.md` | Win11 parity backlog and status |
 
+## Portability notes
+
+- **Terminal:** `xdg-terminal-exec` → `$TERMINAL` → Cinnamon/GNOME settings → common terminals → `xterm`
+- **Theme:** XApp portal → GNOME `color-scheme` → Electron `nativeTheme`
+- **Clipboard:** full interop needs X11 + python3-gi; otherwise in-app paste still works
+- **Default handler undo:** restores the previous `xdg-mime` handler (Nemo/Nautilus/Dolphin/…)
+
 ## Roadmap
 
-See [`docs/PARITY.md`](docs/PARITY.md) for the feature backlog. Packaging (AppImage / `.deb`) and GitHub Releases come after a usable v1.
+See [`docs/PARITY.md`](docs/PARITY.md) for the feature backlog. Broader Wayland clipboard/DnD and polished store packages come next.
 
 ## License
 

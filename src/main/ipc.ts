@@ -15,6 +15,7 @@ import * as terminal from './platform/terminal'
 import * as props from './platform/props'
 import * as search from './platform/search'
 import * as theme from './platform/theme'
+import * as capabilities from './platform/capabilities'
 import * as settings from './state/settings'
 import * as viewstate from './state/viewstate'
 import * as drag from './platform/drag'
@@ -84,6 +85,7 @@ const routes: Record<string, Handler> = {
   getSettings: () => settings.getSettings(),
   setSettings: (_e, patch) => settings.patchSettings(patch),
   getTheme: () => theme.currentTheme(),
+  getCapabilities: () => capabilities.getCapabilities() ?? capabilities.probeCapabilities(),
   // windows / native
   newWindow: (_e, p) => { createWindow(p) },
   windowControl: (e, action) => {

@@ -19,6 +19,7 @@ import type { FileEntry, SearchChunk, SearchRequest } from '../../shared/types'
 import { entryFor } from '../fs/list'
 import { getSettings } from '../state/settings'
 import { indexCovers, indexSearch, nameMatcher, refreshIfStale } from './indexer'
+import { getCapabilities } from './capabilities'
 
 const MAX_RESULTS = 10_000
 const BATCH_SIZE = 200
@@ -56,7 +57,14 @@ export async function startSearch(wc: WebContents, req: SearchRequest): Promise<
     const tasks: Promise<void>[] = [
       useIndex ? fromIndex(job, req) : walk(job, req, makeMatcher(req.query)),
     ]
-    if (req.contents && req.query) tasks.push(runRipgrep(job, req))
+    if (req.contents && req.query) {
+      const caps = getCapabilities()
+      if (caps && !caps.ripgrep) {
+        job.error = 'Content search needs ripgrep (rg). Install it for your distro, then restart LiqExplorer.'
+      } else {
+        tasks.push(runRipgrep(job, req))
+      }
+    }
     await Promise.allSettled(tasks)
     finish(job)
     // the index answered from a snapshot: quietly re-scan when it is stale so

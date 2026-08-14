@@ -1,10 +1,5 @@
-// Light/dark theme tracking for Cinnamon.
-//
-// Source of truth: the xdg-desktop-portal-xapp key
-// `gsettings get org.x.apps.portal color-scheme` -> 'prefer-dark' | 'prefer-light'
-// | 'default'. nativeTheme does not follow Cinnamon reliably, so we watch the
-// gsettings key with a long-lived `gsettings monitor` child and keep
-// nativeTheme's 'updated' event only as a deduped backup signal.
+// Light/dark theme — portable across Cinnamon (XApp portal), GNOME, and
+// Electron's nativeTheme fallback for KDE/other DEs.
 
 import { app, nativeTheme } from 'electron'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -12,34 +7,63 @@ import { broadcast } from '../windows'
 import { PUSH } from '../../shared/ipc'
 
 let current: 'light' | 'dark' = 'light'
-let monitor: ChildProcess | null = null
+const monitors: ChildProcess[] = []
 
 export function currentTheme(): 'light' | 'dark' {
   return current
 }
 
-function readPortal(): 'light' | 'dark' | null {
+function parseScheme(out: string): 'light' | 'dark' | null {
+  if (out.includes('prefer-dark')) return 'dark'
+  if (out.includes('prefer-light') || out.includes("'default'") || out.includes('"default"')) {
+    // 'default' usually means follow the light/dark of the DE; treat as light
+    // unless nativeTheme already says dark (handled by caller).
+    return out.includes('prefer-light') ? 'light' : null
+  }
+  return null
+}
+
+function readGsettings(schema: string, key: string): string | null {
   try {
-    const out = execFileSync('gsettings', ['get', 'org.x.apps.portal', 'color-scheme'],
-      { encoding: 'utf8', timeout: 3000 })
-    return out.includes('prefer-dark') ? 'dark' : 'light'
+    return execFileSync('gsettings', ['get', schema, key], {
+      encoding: 'utf8', timeout: 3000,
+    })
   } catch {
     return null
   }
 }
 
+/** Prefer XApp (Cinnamon/Mint), then GNOME color-scheme, else null. */
+function readPortal(): 'light' | 'dark' | null {
+  for (const [schema, key] of [
+    ['org.x.apps.portal', 'color-scheme'],
+    ['org.gnome.desktop.interface', 'color-scheme'],
+  ] as const) {
+    const out = readGsettings(schema, key)
+    if (!out) continue
+    const parsed = parseScheme(out)
+    if (parsed) return parsed
+    // default / unknown → let nativeTheme decide
+    if (out.includes('default')) return null
+  }
+  // Older GNOME: gtk-theme name containing "-dark"
+  const gtk = readGsettings('org.gnome.desktop.interface', 'gtk-theme')
+  if (gtk && /dark/i.test(gtk)) return 'dark'
+  if (gtk) return 'light'
+  return null
+}
+
 function apply(t: 'light' | 'dark'): void {
-  if (t === current) return          // dedupe: gsettings monitor + nativeTheme both fire
+  if (t === current) return
   current = t
   broadcast(PUSH.themeChanged, t)
 }
 
-export function initTheme(): void {
-  current = readPortal() ?? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
-
+function startMonitor(schema: string, key: string): void {
   try {
-    monitor = spawn('gsettings', ['monitor', 'org.x.apps.portal', 'color-scheme'],
-      { stdio: ['ignore', 'pipe', 'ignore'] })
+    const monitor = spawn('gsettings', ['monitor', schema, key], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
     monitor.stdout!.setEncoding('utf8')
     let buf = ''
     monitor.stdout!.on('data', (d: string) => {
@@ -48,22 +72,38 @@ export function initTheme(): void {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i)
         buf = buf.slice(i + 1)
-        if (!line.includes('color-scheme')) continue
-        apply(line.includes('prefer-dark') ? 'dark' : 'light')
+        if (!line.includes(key) && !line.includes('color-scheme') && !line.includes('gtk-theme')) continue
+        const next = readPortal() ?? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+        apply(next)
       }
     })
-    monitor.on('error', () => { monitor = null })
-    monitor.on('exit', () => { monitor = null })
+    monitor.on('error', () => { /* binary missing */ })
+    monitor.on('exit', () => {
+      const idx = monitors.indexOf(monitor)
+      if (idx >= 0) monitors.splice(idx, 1)
+    })
     monitor.unref()
+    monitors.push(monitor)
   } catch {
-    monitor = null
+    /* ignore */
   }
+}
 
-  // Backup: Electron's own theme signal (fires on some GTK theme changes).
+export function initTheme(): void {
+  current = readPortal() ?? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+
+  startMonitor('org.x.apps.portal', 'color-scheme')
+  startMonitor('org.gnome.desktop.interface', 'color-scheme')
+
   nativeTheme.on('updated', () => {
     const t = readPortal() ?? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
     apply(t)
   })
 
-  app.on('will-quit', () => { try { monitor?.kill() } catch { /* gone */ } monitor = null })
+  app.on('will-quit', () => {
+    for (const m of monitors) {
+      try { m.kill() } catch { /* gone */ }
+    }
+    monitors.length = 0
+  })
 }

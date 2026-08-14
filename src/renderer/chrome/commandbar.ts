@@ -2,7 +2,8 @@
 // Sort/View dropdowns, See-more (...) menu; swaps to Recycle Bin commands on trash://.
 import { app, liq, Tab } from '../core/app'
 import { actions } from '../core/actions'
-import type { SortKey, ViewMode } from '../../shared/types'
+import type { ViewMode } from '../../shared/types'
+import { sortKeysFor } from '../../shared/sort'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
 
@@ -21,9 +22,8 @@ const SVG_MORE = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentC
 const SVG_PANE = S('<rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M9.5 3v10"/>')
 const SVG_RESTORE = S('<path d="M8 12.5V5M5 7.5 8 4.5l3 3M3 14h10"/>')
 
-const SORT_KEYS: [string, SortKey][] = [
-  ['Name', 'name'], ['Date modified', 'mtime'], ['Type', 'type'], ['Size', 'size'],
-]
+// sort/group keys come from shared/sort.ts (sortKeysFor) — same list the
+// right-click menus and the column chooser use
 const VIEW_MODES: [string, ViewMode, string][] = [
   ['Extra large icons', 'extra-large', 'Ctrl+Shift+1'],
   ['Large icons', 'large', 'Ctrl+Shift+2'],
@@ -133,7 +133,7 @@ export function mountCommandBar(root: HTMLElement): void {
     const t = app.activeTab
     const vs = t.viewState
     const items: MenuItem[] = [
-      ...SORT_KEYS.map(([lb, k]): MenuItem => ({
+      ...sortKeysFor(t.path).map(({ key: k, label: lb }): MenuItem => ({
         label: lb, radio: true, checked: vs.sortKey === k,
         onClick: () => t.setViewState({ sortKey: k }),
       })),
@@ -145,7 +145,7 @@ export function mountCommandBar(root: HTMLElement): void {
         label: 'Group by',
         submenu: [
           { label: '(None)', radio: true, checked: vs.groupKey === 'none', onClick: () => t.setViewState({ groupKey: 'none' }) },
-          ...SORT_KEYS.map(([lb, k]): MenuItem => ({
+          ...sortKeysFor(t.path).map(({ key: k, label: lb }): MenuItem => ({
             label: lb, radio: true, checked: vs.groupKey === k,
             onClick: () => t.setViewState({ groupKey: k }),
           })),

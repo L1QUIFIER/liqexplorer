@@ -46,6 +46,12 @@ function mounts(): MountInfo[] {
   return mountTable
 }
 
+/** mount points, longest first — the renderer uses these to tell whether a
+ * drag crosses volumes (Explorer: same volume moves, different volume copies) */
+export function mountPoints(): string[] {
+  return mounts().map(m => m.prefix).sort((a, b) => b.length - a.length)
+}
+
 const REMOTE_FS = /^(cifs|smb3|nfs|fuse\.sshfs|fuse\.gvfsd-fuse)/
 
 /**
@@ -92,6 +98,7 @@ export async function entryFor(p: string, name: string, st?: fs.Stats | null, ct
     name, path: full, isDir, isSymlink: isLink, target,
     size: isDir ? -1 : st2.size, mtime: st2.mtimeMs, ctime: st2.ctimeMs,
     btime: st2.birthtimeMs > 0 ? st2.birthtimeMs : undefined,
+    atime: st2.atimeMs,
     mime,
     icons: isDir ? folderIcons(full) : iconsForMime(mime),
     hidden: name.startsWith('.') || (ctx?.hiddenSet?.has(name) ?? false),

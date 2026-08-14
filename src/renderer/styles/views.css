@@ -421,3 +421,10 @@ img.vh-thumbimg { border-radius: 2px; }
   stroke-dasharray: 85 41;
 }
 @keyframes vh-rot { to { transform: rotate(360deg); } }
+
+/* right-drag: our own ghost (HTML5 DnD is left-button only), positioned per
+   mousemove, and a crumb/nav row lit up as the drop destination */
+.vh-rightghost { opacity: 0.85; }
+body.is-rightdragging { cursor: copy; }
+body.is-rightdragging * { cursor: copy !important; }
+.crumb.drop-target { background: var(--accent-selection); border-radius: var(--radius); }

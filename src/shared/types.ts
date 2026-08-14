@@ -24,6 +24,7 @@ export interface FileEntry {
   mtime: number         // epoch ms
   ctime: number         // inode change / best-effort created, epoch ms
   btime?: number        // birth time if the fs provides it
+  atime?: number        // last access, epoch ms (absent on fast-path listings)
   mime: string          // e.g. 'text/plain', 'inode/directory'
   /** freedesktop icon names, best-first (renderer resolves via liqicon://) */
   icons: string[]

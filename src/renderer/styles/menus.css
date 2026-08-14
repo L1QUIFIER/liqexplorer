@@ -1,6 +1,6 @@
 /* ============================================================
    Win11 flyout menus (rendered by src/renderer/menus/menu.ts)
-   Metrics per:
+   Metrics per docs/research/research-layout-chrome.md:
    flyout bg, 8px radius, flyout shadow, 4px padding, 32px items,
    16px leading glyph column, right-aligned shortcut column.
    ============================================================ */
@@ -202,3 +202,5 @@
 }
 /* icon row at the bottom -> tooltips open above the buttons */
 .menu--up .menu-tip { top: auto; bottom: calc(100% + 6px); }
+/* the action a left-drag would have taken (Explorer bolds it) */
+.menu-item.is-default .menu-label { font-weight: 600; }

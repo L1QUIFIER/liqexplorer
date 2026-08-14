@@ -17,7 +17,7 @@ import * as engine from './engine'
 import * as trash from '../platform/trash'
 
 export interface UndoEntry {
-  kind: 'move' | 'rename' | 'copy' | 'trash' | 'mkdir' | 'mkfile'
+  kind: 'move' | 'rename' | 'copy' | 'trash' | 'mkdir' | 'mkfile' | 'symlink'
   /** item count for the label */
   count: number
   /** move/rename/copy: what happened, from -> to (to = actual created path) */
@@ -35,6 +35,7 @@ let busy = false
 
 const VERBS: Record<UndoEntry['kind'], string> = {
   move: 'Move', rename: 'Rename', copy: 'Copy', trash: 'Delete', mkdir: 'New', mkfile: 'New',
+  symlink: 'Create Shortcut',
 }
 
 function label(e: UndoEntry | undefined): string | null {
@@ -127,6 +128,7 @@ async function applyInverse(e: UndoEntry): Promise<boolean> {
     }
     case 'mkdir':
     case 'mkfile':
+    case 'symlink':
       if (!e.created?.length) return true
       return ok(await engine.runInternal({ kind: 'delete', sources: e.created }))
   }
@@ -153,6 +155,14 @@ async function applyForward(e: UndoEntry): Promise<boolean> {
       let all = true
       for (const p of e.created ?? []) {
         if (!ok(await engine.runInternal({ kind: e.kind, sources: [], dest: p }))) all = false
+      }
+      return all
+    }
+    case 'symlink': {
+      // dest is the full link path, so each link is recreated exactly where it was
+      let all = true
+      for (const p of e.pairs ?? []) {
+        if (!ok(await engine.runInternal({ kind: 'symlink', sources: [p.from], dest: p.to }))) all = false
       }
       return all
     }

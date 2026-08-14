@@ -9,7 +9,7 @@
 // Flagship behavior: "Expand to open folder" — on every navigation of the
 // active tab (when settings.navExpandToCurrent), the tree expands along the
 // ancestor chain to the current folder, highlights it and scrolls it into
-// view. The walk follows Thunar's model
+// view. The walk follows Thunar's model (docs/research/research-prior-art.md
 // §8a): lazy per-branch loads that are awaited (not re-issued) while in
 // flight, one forced re-list retry when a segment is missing, a 5 s total
 // abort, and NO auto-collapsing ever — a user's manual collapse wins until
@@ -68,6 +68,13 @@ interface Section {
 export function mountNavPane(root: HTMLElement): void {
   const pane = root
   const splitter = document.getElementById('navpane-splitter')
+
+  // right-click on empty pane space (rows stopPropagation, so only blank area
+  // reaches here) — Explorer's nav-pane options menu
+  pane.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    app.emit('navpane-empty-context', { x: e.clientX, y: e.clientY })
+  })
 
   // ---- state ----
   const treeRoots: TreeNode[] = []
@@ -254,6 +261,8 @@ export function mountNavPane(root: HTMLElement): void {
     const row = document.createElement('div')
     row.className = 'nav-row nav-tree-row'
     row.style.paddingLeft = (BASE_PAD_PX + depth * INDENT_PX) + 'px'
+    row.dataset.liqPath = path              // right-drag drop target
+    row.dataset.liqLabel = label
     const chev = document.createElement('span')
     chev.className = 'nav-chevron'
     row.append(chev, makeIcon(icons))
@@ -482,6 +491,8 @@ export function mountNavPane(root: HTMLElement): void {
     const row = document.createElement('div')
     row.className = 'nav-row nav-flat'
     row.style.paddingLeft = (BASE_PAD_PX + depth * INDENT_PX) + 'px'
+    row.dataset.liqPath = place.path         // right-drag drop target
+    row.dataset.liqLabel = place.label
     const spacer = document.createElement('span')
     spacer.className = 'nav-chevron empty'
     row.append(spacer, makeIcon(place.icons), makeLabel(place.label))

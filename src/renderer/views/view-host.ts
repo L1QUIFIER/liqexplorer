@@ -17,6 +17,7 @@ import {
 import { createDetailsHeader, HEADER_H, normalizedColumns, detailsTotalWidth } from './header'
 import { Renamer } from './rename'
 import { wireDnD } from './dnd'
+import { initRightDrag } from './rightdrag'
 
 const OVERSCAN = 10
 const POOL_MAX = 120
@@ -596,6 +597,12 @@ export function mountViewHost(root: HTMLElement): void {
   }
 
   // ---------- mouse ----------
+  const entryFromEvent = (target: EventTarget | null): FileEntry | null => {
+    const hit = itemDataFromTarget(target)
+    return hit && hit.item.kind === 'entry' ? hit.item.entry! : null
+  }
+  const rightDrag = initRightDrag({ scroller, tab: () => tab(), entryFromEvent })
+
   let deferred: { path: string; labelHit: boolean; x: number; y: number } | null = null
 
   scroller.addEventListener('mousedown', (e) => {
@@ -720,8 +727,18 @@ export function mountViewHost(root: HTMLElement): void {
     }
   })
 
-  scroller.addEventListener('contextmenu', (e) => {
-    e.preventDefault()
+  // On Linux `contextmenu` fires on mouse DOWN, which would pop a menu before a
+  // right-drag could ever start — so it is suppressed here and the menu opens
+  // on mouse UP instead (which is also what Windows does).
+  scroller.addEventListener('contextmenu', (e) => { e.preventDefault() })
+
+  scroller.addEventListener('mouseup', (e) => {
+    if (e.button !== 2) return
+    if (rightDrag.consumedMenu()) return    // the gesture was a drag, not a click
+    openContextMenuAt(e)
+  })
+
+  function openContextMenuAt(e: MouseEvent): void {
     const t = tab()
     if (!t) return
     const hit = itemDataFromTarget(e.target)
@@ -739,7 +756,7 @@ export function mountViewHost(root: HTMLElement): void {
     } else {
       app.emit('background-context', { x: e.clientX, y: e.clientY })
     }
-  })
+  }
 
   // cancel deferred plain-click handling once a drag actually starts
   canvas.addEventListener('dragstart', () => {
@@ -938,10 +955,7 @@ export function mountViewHost(root: HTMLElement): void {
     scroller,
     canvas,
     tab: () => tab(),
-    entryFromEvent: (target) => {
-      const hit = itemDataFromTarget(target)
-      return hit && hit.item.kind === 'entry' ? hit.item.entry! : null
-    },
+    entryFromEvent,
     elForPath: (p) => {
       const i = layout?.byPath.get(p)
       return i === undefined ? null : rendered.get(i) ?? null

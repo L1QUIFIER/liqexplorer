@@ -7,6 +7,7 @@
 import { liq, type Tab } from '../core/app'
 import type { FileEntry } from '../../shared/types'
 import { dirname, iconURL } from './items'
+import { defaultDragEffect } from './rightdrag'
 
 export interface DnDHost {
   scroller: HTMLElement
@@ -104,7 +105,13 @@ export function wireDnD(host: DnDHost): void {
     const over = host.entryFromEvent(e.target)
     const folder = over && over.isDir ? over : null
     const dest = folder ? folder.path : t.path
-    let effect: 'copy' | 'move' | 'none' = internal ? (e.ctrlKey ? 'copy' : 'move') : 'copy'
+    // Explorer modifiers: Ctrl copies, Shift moves, otherwise the default is
+    // move within a volume and copy across volumes. (Alt = make a shortcut is
+    // handled on drop — the DataTransfer API has no 'link into folder' effect.)
+    let effect: 'copy' | 'move' | 'none' = !internal ? 'copy'
+      : e.ctrlKey ? 'copy'
+        : e.shiftKey ? 'move'
+          : dragPaths?.length ? defaultDragEffect(dragPaths[0], dest) : 'move'
     if (dest.includes('://')) {
       // only meaningful virtual target: dropping on the Recycle Bin background
       effect = internal && t.path === 'trash://' && !folder ? 'move' : 'none'
@@ -169,10 +176,15 @@ export function wireDnD(host: DnDHost): void {
     }
     if (dest.includes('://')) return
 
-    const kind = internal ? (e.ctrlKey ? 'copy' : 'move') : 'copy'
+    // Alt (or Ctrl+Shift) drops a shortcut, like Explorer
+    const kind: 'copy' | 'move' | 'symlink' = !internal ? 'copy'
+      : (e.altKey || (e.ctrlKey && e.shiftKey)) ? 'symlink'
+        : e.ctrlKey ? 'copy'
+          : e.shiftKey ? 'move'
+            : defaultDragEffect(sources[0], dest)
     let filtered = sources.filter(s => dest !== s && !dest.startsWith(s + '/'))
     if (kind === 'move') filtered = filtered.filter(s => dirname(s) !== dest)
-    else if (!folder && !internal) filtered = filtered.filter(s => dirname(s) !== dest)
+    else if (!folder && !internal && kind === 'copy') filtered = filtered.filter(s => dirname(s) !== dest)
     if (filtered.length) void liq.startOp({ kind, sources: filtered, dest })
   })
 }

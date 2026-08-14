@@ -95,7 +95,7 @@ interface Op {
 }
 
 const TERMINAL = new Set<OpStatus>(['done', 'error', 'cancelled'])
-const RECORDABLE = new Set<OpKind>(['copy', 'move', 'rename', 'trash', 'mkdir', 'mkfile'])
+const RECORDABLE = new Set<OpKind>(['copy', 'move', 'rename', 'trash', 'mkdir', 'mkfile', 'symlink'])
 
 const opsById = new Map<number, Op>()
 const pending: Op[] = []
@@ -265,6 +265,14 @@ function recordOutcome(op: Op): void {
       break
     case 'mkfile':
       if (op.created.length) undo.record({ kind: 'mkfile', created: [...op.created], count: 1 })
+      break
+    case 'symlink':
+      if (op.created.length) {
+        undo.record({
+          kind: 'symlink', created: [...op.created],
+          pairs: [...op.copyPairs], count: op.created.length,
+        })
+      }
       break
   }
 }
@@ -1026,22 +1034,44 @@ async function execMake(op: Op): Promise<void> {
 }
 
 async function execSymlink(op: Op): Promise<void> {
-  const target = op.req.sources[0]
   const dst = op.req.dest
-  if (!target || !dst) throw new Error('Invalid request')
-  op.itemsTotal = 1
+  if (!op.req.sources.length || !dst) throw new Error('Invalid request')
+  // dest is either a full link path (single source) or a destination folder
+  // (right-drag 'Create shortcuts here', which links every source into it)
+  const dstSt = await lstatOrNull(dst)
+  const intoDir = op.req.sources.length > 1 || !!dstSt?.isDirectory()
+  op.itemsTotal = op.req.sources.length
   setStatus(op, 'running')
-  try {
-    await fsp.symlink(target, dst)
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException)?.code
-    if (code === 'EPERM' || code === 'EACCES') {
-      // CIFS mounts here cannot create symlinks (research §9)
-      throw new Error('This location does not support symbolic links.')
+  for (const target of op.req.sources) {
+    checkCancel(op)
+    await pauseGate(op)
+    op.currentFile = target
+    let linkPath = dst
+    if (intoDir) {
+      const st = await lstatOrNull(target)
+      const base = `${path.basename(target)} - Shortcut`
+      const name = await lstatOrNull(path.join(dst, base))
+        ? await uniqueSuffixName(dst, base, st?.isDirectory() ?? false)
+        : base
+      linkPath = path.join(dst, name)
     }
-    throw e
+    try {
+      await fsp.symlink(target, linkPath)
+      op.created.push(linkPath)
+      op.copyPairs.push({ from: target, to: linkPath })   // redo needs the target
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOSYS') {
+        // CIFS mounts here cannot create symlinks (research §9)
+        fail(op, target, 'This location does not support symbolic links.')
+      } else if (!intoDir) {
+        throw e
+      } else {
+        fail(op, target, e)
+      }
+    }
+    op.itemsDone++
   }
-  op.itemsDone = 1
 }
 
 // ---------------- archives ----------------

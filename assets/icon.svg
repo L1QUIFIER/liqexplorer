@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!--
+    LiqExplorer app icon.
+    Family language shared with LiqTerm / LiqBrowser / LiqVM: dark rounded card
+    with a 1px white hairline, cyan -> blue accent ramp, flat-with-dimension.
+    Subject: a Fluent-style folder with a document peeking out — the sheet is
+    what makes it read "file manager" rather than merely "a folder".
+    Like LiqVM, this one carries no "Liq" wordmark: at 24-32px the lettering
+    collapses into a smudge and costs the folder the height it needs.
+    All artwork is hand-authored rects/paths/gradients — no raster, no fonts.
+  -->
+  <defs>
+    <!-- userSpaceOnUse throughout so shapes that abut (folder tab + body) share
+         one continuous ramp instead of each remapping 0..1 to its own box. -->
+    <linearGradient id="card" gradientUnits="userSpaceOnUse" x1="0" y1="16" x2="0" y2="496">
+      <stop offset="0" stop-color="#2b2a33"/>
+      <stop offset="1" stop-color="#1c1b22"/>
+    </linearGradient>
+    <!-- folder back: deep blue, the plane behind the paper -->
+    <linearGradient id="back" gradientUnits="userSpaceOnUse" x1="88" y1="118" x2="88" y2="390">
+      <stop offset="0" stop-color="#2181e6"/>
+      <stop offset="1" stop-color="#0b4ba5"/>
+    </linearGradient>
+    <!-- folder front: the family accent ramp, brightest plane in the icon -->
+    <linearGradient id="front" gradientUnits="userSpaceOnUse" x1="88" y1="240" x2="424" y2="390">
+      <stop offset="0" stop-color="#00ddff"/>
+      <stop offset="1" stop-color="#0a84ff"/>
+    </linearGradient>
+    <linearGradient id="sheet" gradientUnits="userSpaceOnUse" x1="256" y1="172" x2="256" y2="306">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbe5f2"/>
+    </linearGradient>
+    <!-- specular top edge on the front panel: white at the top, gone by the sides -->
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="88" y1="240" x2="88" y2="320">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- shadow the front panel casts up onto the paper, so the two planes stay
+         separate instead of white paper bleeding into the white specular edge -->
+    <linearGradient id="cast" gradientUnits="userSpaceOnUse" x1="256" y1="208" x2="256" y2="240">
+      <stop offset="0" stop-color="#12395f" stop-opacity="0"/>
+      <stop offset="1" stop-color="#12395f" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- family card -->
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#card)"/>
+  <rect x="17" y="17" width="478" height="478" rx="103" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+
+  <!-- folder back: one outline so the tab meets the body on a concave fillet
+       (the reverse-sweep arc) rather than a hard notch -->
+  <path fill="url(#back)" d="M106 118
+    H256 a18 18 0 0 1 18 18
+    V142 a14 14 0 0 0 14 14
+    H394 a30 30 0 0 1 30 30
+    V360 a30 30 0 0 1 -30 30
+    H118 a30 30 0 0 1 -30 -30
+    V136 a18 18 0 0 1 18 -18 Z"/>
+
+  <!-- the document inside -->
+  <rect x="141" y="172" width="230" height="134" rx="14" fill="url(#sheet)"/>
+  <g fill="#a4b7d0">
+    <rect x="168" y="198" width="154" height="11" rx="5.5"/>
+    <rect x="168" y="221" width="106" height="11" rx="5.5"/>
+  </g>
+  <rect x="141" y="208" width="230" height="32" fill="url(#cast)"/>
+
+  <!-- folder front -->
+  <rect x="88" y="240" width="336" height="150" rx="30" fill="url(#front)"/>
+  <rect x="89.5" y="241.5" width="333" height="147" rx="28.5" fill="none" stroke="url(#edge)" stroke-width="3"/>
+</svg>

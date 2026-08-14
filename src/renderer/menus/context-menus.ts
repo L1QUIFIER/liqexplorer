@@ -1,4 +1,4 @@
-// Every context menu in the app, built per
+// Every context menu in the app, built per docs/research/research-context-menus.md
 // (Win11 modern-menu item lists, in exact order). mountMenus() listens on app
 // events emitted by the views/nav/titlebar components:
 //   'background-context' { x, y }                       folder background
@@ -7,7 +7,8 @@
 //   'tab-context'        { x, y, index }                titlebar tab
 // Destructive verbs route through app.emit('show-confirm', ...) (dialogs.ts).
 
-import type { AppCandidate, FileEntry, Place, SortKey, ViewMode } from '../../shared/types'
+import type { AppCandidate, FileEntry, Place, ViewMode } from '../../shared/types'
+import { sortKeysFor } from '../../shared/sort'
 import { app, liq, Tab } from '../core/app'
 import { actions } from '../core/actions'
 import { showMenu } from './menu'
@@ -25,6 +26,7 @@ export function mountMenus(): void {
   app.on('background-context', (d: Pt) => { void showBackgroundMenu(d) })
   app.on('item-context', (d: ItemCtx) => { void showItemMenu(d) })
   app.on('navpane-context', (d: NavCtx) => showNavpaneMenu(d))
+  app.on('navpane-empty-context', (d: Pt) => showNavpaneEmptyMenu(d))
   app.on('tab-context', (d: TabCtx) => showTabMenu(d))
 }
 
@@ -56,12 +58,8 @@ const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
   { mode: 'content', label: 'Content', shortcut: 'Ctrl+Shift+8' },
 ]
 
-const SORT_KEYS: { key: SortKey; label: string }[] = [
-  { key: 'name', label: 'Name' },
-  { key: 'mtime', label: 'Date modified' },
-  { key: 'type', label: 'Type' },
-  { key: 'size', label: 'Size' },
-]
+// key list comes from shared/sort.ts so Sort by, Group by, the command bar and
+// the details column chooser always offer the same keys
 
 interface ConfirmOpts { title: string; message: string; okLabel: string; danger?: boolean; onOk: () => void }
 function showConfirm(o: ConfirmOpts): void { app.emit('show-confirm', o) }
@@ -158,7 +156,7 @@ function viewSubmenu(tab: Tab): MenuItem[] {
 
 function sortSubmenu(tab: Tab): MenuItem[] {
   const vs = tab.viewState
-  const items: MenuItem[] = SORT_KEYS.map(k => ({
+  const items: MenuItem[] = sortKeysFor(tab.path).map(k => ({
     label: k.label, radio: true, checked: vs.sortKey === k.key,
     onClick: () => tab.setViewState({ sortKey: k.key }),
   }))
@@ -172,7 +170,7 @@ function groupSubmenu(tab: Tab): MenuItem[] {
   const vs = tab.viewState
   return [
     { label: '(None)', radio: true, checked: vs.groupKey === 'none', onClick: () => tab.setViewState({ groupKey: 'none' }) },
-    ...SORT_KEYS.map<MenuItem>(k => ({
+    ...sortKeysFor(tab.path).map<MenuItem>(k => ({
       label: k.label, radio: true, checked: vs.groupKey === k.key,
       onClick: () => tab.setViewState({ groupKey: k.key }),
     })),
@@ -368,6 +366,26 @@ function openWithSubmenu(entry: FileEntry, apps: AppCandidate[]): MenuItem[] {
 }
 
 // ---------- nav pane menu ----------
+
+/** Explorer's nav-pane empty-space menu: the pane's own display options. */
+function showNavpaneEmptyMenu(d: Pt): void {
+  const s = app.settings
+  showMenu([
+    {
+      label: 'Expand to open folder', checked: s.navExpandToCurrent,
+      onClick: () => { void app.setSettings({ navExpandToCurrent: !s.navExpandToCurrent }) },
+    },
+    {
+      label: 'Show hidden items', checked: s.showHidden,
+      onClick: () => { void app.setSettings({ showHidden: !s.showHidden }) },
+    },
+    { separator: true },
+    {
+      label: 'Hide navigation pane',
+      onClick: () => { void app.setSettings({ showNavPane: false }) },
+    },
+  ], { x: d.x, y: d.y })
+}
 
 function showNavpaneMenu(d: NavCtx): void {
   const place = d.place

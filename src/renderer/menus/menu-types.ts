@@ -22,6 +22,8 @@ export interface MenuItem {
   /** checkbox state; radio renders a bullet */
   checked?: boolean
   radio?: boolean
+  /** the default action of a right-drag menu (Explorer renders it bold) */
+  bold?: boolean
   danger?: boolean
   separator?: boolean
   submenu?: MenuItem[]

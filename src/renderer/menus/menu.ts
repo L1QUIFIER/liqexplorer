@@ -103,6 +103,7 @@ function buildLevel(
     item.setAttribute('role', it.radio ? 'menuitemradio' : it.checked !== undefined ? 'menuitemcheckbox' : 'menuitem')
     if (it.disabled) { item.classList.add('is-disabled'); item.setAttribute('aria-disabled', 'true') }
     if (it.danger) item.classList.add('is-danger')
+    if (it.bold) item.classList.add('is-default')
     if (it.submenu) { item.classList.add('has-sub'); item.setAttribute('aria-haspopup', 'menu') }
     if (it.checked !== undefined) item.setAttribute('aria-checked', String(!!it.checked))
 

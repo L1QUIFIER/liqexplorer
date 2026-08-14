@@ -189,6 +189,8 @@ export function mountNavRow(root: HTMLElement): void {
         const i = start + j
         const pair = document.createElement('div')
         pair.className = 'crumb'
+        pair.dataset.liqPath = c.path          // right-drag drop target
+        pair.dataset.liqLabel = c.label
         const btn = document.createElement('button')
         btn.className = 'crumb-btn'
         btn.textContent = c.label

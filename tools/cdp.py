@@ -6,7 +6,9 @@
   cdp.py shot OUT.png       capture the rendered frame (works where X `import` shows black)
   cdp.py console [SECS]     dump console messages + uncaught exceptions for SECS (default 2)
   cdp.py click X Y [right|dbl]
-  cdp.py move X Y           mouse move (for hover states)
+  cdp.py move X Y [left|right]   mouse move; the button name keeps it held (drag)
+  cdp.py press X Y [right]       button down only
+  cdp.py release X Y [right]     button up only
   cdp.py key NAME [ctrl] [shift] [alt]    NAME: a-z, 0-9, F1-F12, Enter, Escape, Delete,
                                           Backspace, Tab, Up, Down, Left, Right, Home, End
   cdp.py type 'TEXT'        type text into the focused element
@@ -90,11 +92,21 @@ def main():
             elif meth == 'Log.entryAdded':
                 e = m['params']['entry']
                 print(f"[{e['level']}]", e['text'][:300])
-    elif cmd in ('click', 'move'):
+    elif cmd in ('click', 'move', 'press', 'release'):
         x, y = float(sys.argv[2]), float(sys.argv[3])
         opts = sys.argv[4:]
         if cmd == 'move':
-            send(ws, 'Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y})
+            button = 'right' if 'right' in opts else ('left' if 'left' in opts else 'none')
+            # buttons bitmask keeps a held button pressed across the move (drags)
+            mask = 2 if button == 'right' else (1 if button == 'left' else 0)
+            send(ws, 'Input.dispatchMouseEvent', {
+                'type': 'mouseMoved', 'x': x, 'y': y, 'button': button, 'buttons': mask})
+        elif cmd in ('press', 'release'):
+            button = 'right' if 'right' in opts else 'left'
+            send(ws, 'Input.dispatchMouseEvent', {
+                'type': 'mousePressed' if cmd == 'press' else 'mouseReleased',
+                'x': x, 'y': y, 'button': button, 'buttons': 2 if button == 'right' else 1,
+                'clickCount': 1})
         else:
             button = 'right' if 'right' in opts else 'left'
             count = 2 if 'dbl' in opts else 1

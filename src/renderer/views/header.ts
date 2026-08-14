@@ -7,6 +7,7 @@ import type { MenuItem } from '../menus/menu-types'
 import type { ColumnSpec, SortKey, FileEntry } from '../../shared/types'
 import type { Tab } from '../core/app'
 import { COLUMN_LABELS, cellText, type DetailCol } from './items'
+import { sortKeysFor } from '../../shared/sort'
 
 export const HEADER_H = 32
 const PAD_LEFT = 12
@@ -26,9 +27,9 @@ export function detailsTotalWidth(cols: DetailCol[]): number {
   return w
 }
 
-const TOGGLE_KEYS: SortKey[] = ['name', 'mtime', 'type', 'size', 'ext', 'ctime']
 const DEFAULT_W: Partial<Record<SortKey, number>> = {
-  name: 300, mtime: 160, ctime: 160, type: 140, size: 100, ext: 90,
+  name: 300, mtime: 160, ctime: 160, atime: 160, type: 140, size: 100, ext: 90,
+  origPath: 260, deletedAt: 160,
 }
 
 export interface HeaderHost {
@@ -247,7 +248,7 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
     const t = host.tab()
     if (!t) return
     const cols = normalizedColumns(t.viewState.columns)
-    const items: MenuItem[] = TOGGLE_KEYS.map((k) => ({
+    const items: MenuItem[] = sortKeysFor(t.path).map(({ key: k }) => ({
       label: COLUMN_LABELS[k] ?? k,
       checked: cols.some(c => c.key === k),
       disabled: k === 'name',

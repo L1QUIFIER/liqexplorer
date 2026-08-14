@@ -8,6 +8,34 @@ export function naturalCompare(a: string, b: string): number {
   return collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0)
 }
 
+// ---- canonical sort/group key list (Sort by, Group by, and the details
+// column chooser all render from this, so the three can never diverge) ----
+
+export interface SortKeyInfo { key: SortKey; label: string }
+
+const GENERAL_SORT_KEYS: SortKeyInfo[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'mtime', label: 'Date modified' },
+  { key: 'ctime', label: 'Date created' },
+  { key: 'atime', label: 'Date accessed' },
+  { key: 'type', label: 'Type' },
+  { key: 'size', label: 'Size' },
+  { key: 'ext', label: 'File extension' },
+]
+
+const TRASH_SORT_KEYS: SortKeyInfo[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'origPath', label: 'Original location' },
+  { key: 'deletedAt', label: 'Date deleted' },
+  { key: 'type', label: 'Type' },
+  { key: 'size', label: 'Size' },
+]
+
+/** Explorer's key list is folder-template dependent; ours varies by location. */
+export function sortKeysFor(path: string): SortKeyInfo[] {
+  return path === 'trash://' ? TRASH_SORT_KEYS : GENERAL_SORT_KEYS
+}
+
 export function typeLabelFor(e: FileEntry): string {
   if (e.isDir) return 'File folder'
   if (!e.ext) return 'File'
@@ -19,7 +47,7 @@ function keyValue(e: FileEntry, key: SortKey): string | number {
     case 'name': return e.name
     case 'mtime': return e.mtime
     case 'ctime': return e.btime ?? e.ctime
-    case 'atime': return e.mtime
+    case 'atime': return e.atime ?? e.mtime
     case 'size': return e.isDir ? -1 : e.size
     case 'type': return typeLabelFor(e)
     case 'ext': return e.ext

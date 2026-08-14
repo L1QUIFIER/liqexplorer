@@ -29,6 +29,7 @@ const routes: Record<string, Handler> = {
   listChildDirs: (_e, p, showHidden) => fsList.listChildDirs(p, showHidden),
   statEntries: (_e, paths) => fsList.statEntries(paths),
   pathExists: (_e, p) => fsList.pathExists(p),
+  mountPoints: () => fsList.mountPoints(),
   homeDir: () => fsList.homeDir(),
   userDirs: () => fsList.userDirs(),
   watchDir: (e, p) => fsWatch.watchDir(sender(e), p),

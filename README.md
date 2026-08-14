@@ -6,6 +6,22 @@ Tabs, command bar, breadcrumb address bar, navigation tree, details/icon views w
 
 > **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet. Best on **X11** (Cinnamon/GNOME/XFCE/MATE). Wayland works for browsing with limited clipboard interop.
 
+
+## Screenshots
+
+Captured from a disposable demo profile (generic folders and stock-style photos only — no personal files or drives).
+
+![Home](docs/screenshots/home.png)
+
+![Pictures — large icons](docs/screenshots/pictures.png)
+
+![Folder browsing](docs/screenshots/folders.png)
+
+![Projects](docs/screenshots/projects.png)
+
+![Context menu](docs/screenshots/context-menu.png)
+
+
 ## Requirements
 
 - Linux x86_64

@@ -1,0 +1,204 @@
+/* ============================================================
+   Win11 flyout menus (rendered by src/renderer/menus/menu.ts)
+   Metrics per:
+   flyout bg, 8px radius, flyout shadow, 4px padding, 32px items,
+   16px leading glyph column, right-aligned shortcut column.
+   ============================================================ */
+
+.menu {
+  /* component-scoped knobs */
+  --menu-item-h: 32px;
+  --menu-iconbtn-w: 40px;
+  --menu-iconbtn-h: 36px;
+
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-width: 400px;
+  max-height: calc(100vh - 16px);
+  background: var(--bg-flyout);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-flyout);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  user-select: none;
+  cursor: default;
+  outline: none;
+  animation: liq-menu-in 120ms ease-out;
+}
+
+.menu-root { min-width: 240px; }
+.menu-sub { min-width: 190px; }
+
+/* entrance: opacity + 4px translate; direction flips when opening upward */
+@keyframes liq-menu-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes liq-menu-in-up {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.menu--up { animation-name: liq-menu-in-up; }
+
+/* ---------- scrolling body (menus taller than the viewport) ---------- */
+
+.menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+.menu-scroll::-webkit-scrollbar { width: 10px; }
+.menu-scroll::-webkit-scrollbar-track { background: transparent; }
+.menu-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ---------- items ---------- */
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--menu-item-h);
+  padding: 0 10px;
+  margin: 1px 0;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.menu-item.is-active,
+.menu-item.is-open { background: var(--bg-hover); }
+.menu-item:not(.is-disabled):active { background: var(--bg-active); }
+.menu-item.is-disabled { color: var(--text-disabled); }
+.menu-item.is-danger { color: var(--danger); }
+
+/* leading 16px column: check / radio bullet / icon (keeps labels aligned) */
+.menu-lead {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.menu-lead svg { width: 16px; height: 16px; display: block; }
+.menu-radio svg { width: 14px; height: 14px; }
+
+.menu-icon { display: inline-flex; width: 16px; height: 16px; }
+.menu-icon svg { width: 16px; height: 16px; display: block; }
+.menu-icon-img { width: 16px; height: 16px; object-fit: contain; display: block; }
+.menu-item.is-disabled .menu-icon-img { opacity: 0.4; }
+
+.menu-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* right-aligned secondary shortcut column */
+.menu-shortcut {
+  flex: none;
+  padding-left: 24px;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+.menu-item.is-disabled .menu-shortcut { color: var(--text-disabled); }
+
+/* submenu chevron */
+.menu-subarrow {
+  flex: none;
+  display: inline-flex;
+  margin-left: 4px;
+  margin-right: -4px;
+  color: var(--text-secondary);
+}
+.menu-subarrow svg { width: 12px; height: 12px; display: block; }
+.menu-item.is-disabled .menu-subarrow { color: var(--text-disabled); }
+
+/* ---------- separators ---------- */
+
+.menu-sep {
+  flex: none;
+  height: 1px;
+  margin: 4px 1px;
+  background: var(--divider);
+}
+
+/* ---------- icon row (pinned Win11 compact action row) ---------- */
+
+.menu-iconrow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--divider);
+}
+/* when the menu opens upward, the icon row moves to the bottom so it stays
+   nearest the pointer (Win11 behavior) */
+.menu--up .menu-iconrow { order: 2; border-bottom: none; border-top: 1px solid var(--divider); }
+.menu--up .menu-scroll { order: 1; }
+
+.menu-iconbtn {
+  position: relative;
+  flex: none;
+  width: var(--menu-iconbtn-w);
+  height: var(--menu-iconbtn-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: inherit;
+}
+.menu-iconbtn:hover:not(:disabled) { background: var(--bg-hover); }
+.menu-iconbtn:active:not(:disabled) { background: var(--bg-active); }
+.menu-iconbtn:focus-visible {
+  background: var(--bg-hover);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.menu-iconbtn:disabled { color: var(--text-disabled); }
+.menu-iconbtn svg { width: 16px; height: 16px; display: block; }
+.menu-iconbtn .menu-icon-img { width: 16px; height: 16px; }
+.menu-iconbtn:disabled .menu-icon-img { opacity: 0.4; }
+
+/* tooltip bubble under each icon-row button (delayed reveal) */
+.menu-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  background: var(--bg-flyout);
+  color: var(--text-primary);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-flyout);
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease-out;
+  z-index: 1;
+}
+.menu-iconbtn:hover:not(:disabled) .menu-tip {
+  opacity: 1;
+  transition-delay: 500ms;
+}
+/* icon row at the bottom -> tooltips open above the buttons */
+.menu--up .menu-tip { top: auto; bottom: calc(100% + 6px); }

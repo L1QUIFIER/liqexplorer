@@ -1,0 +1,31 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+  background: var(--bg-window);
+  user-select: none;
+  cursor: default;
+}
+#app { display: flex; flex-direction: column; height: 100vh; }
+#titlebar { height: var(--titlebar-h); flex: none; -webkit-app-region: drag; }
+#navrow { height: var(--navrow-h); flex: none; }
+#commandbar { height: var(--commandbar-h); flex: none; }
+#main { flex: 1; display: flex; min-height: 0; }
+#navpane { width: var(--navpane-w); flex: none; overflow-y: auto; }
+#navpane-splitter { width: 4px; flex: none; cursor: col-resize; }
+#viewhost { flex: 1; min-width: 0; background: var(--bg-content); border-radius: var(--radius-lg) 0 0 0; border: 1px solid var(--stroke); border-right: none; border-bottom: none; position: relative; }
+#sidepane { width: 300px; flex: none; overflow-y: auto; background: var(--bg-content); }
+#statusbar { height: var(--statusbar-h); flex: none; display: flex; align-items: center; }
+#menu-layer, #dialog-layer { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+#menu-layer > *, #dialog-layer > * { pointer-events: auto; }
+#ops-flyout { position: fixed; right: 16px; bottom: 44px; z-index: 90; }
+img.icon { width: 16px; height: 16px; object-fit: contain; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+*:hover > ::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+button { font: inherit; color: inherit; background: none; border: none; }
+input { font: inherit; }
+[hidden] { display: none !important; }

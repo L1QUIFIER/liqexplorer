@@ -1,0 +1,11 @@
+# Dependencies / build output
+node_modules/
+dist/
+*.log
+.env*
+__pycache__/
+.cache/
+
+# Local-only (machine-specific / not for public)
+docs/build-reports/
+docs/research/

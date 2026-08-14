@@ -1,0 +1,19 @@
+{
+  "name": "liqexplorer",
+  "version": "0.1.0",
+  "description": "Windows 11 File Explorer replica for Linux Mint / Cinnamon — LiqExplorer",
+  "main": "dist/main/index.js",
+  "private": true,
+  "scripts": {
+    "build": "bash bin/build.sh",
+    "start": "bash bin/run.sh",
+    "dev": "bash bin/dev.sh",
+    "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "electron": "^38.2.0",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2"
+  }
+}

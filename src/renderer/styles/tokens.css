@@ -1,0 +1,74 @@
+/* Win11 Fluent design tokens. Light theme default; [data-theme="dark"] overrides.
+   Sizes/typography measured against Windows 11 23H2 File Explorer. */
+:root {
+  /* typography — Segoe UI Variable if present, graceful fallbacks */
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Selawik',
+             'Inter', system-ui, sans-serif;
+  --fs-caption: 12px;
+  --fs-body: 14px;
+  --fs-title: 14px;
+
+  /* layout metrics */
+  --titlebar-h: 40px;
+  --navrow-h: 48px;
+  --commandbar-h: 48px;
+  --statusbar-h: 28px;
+  --navpane-w: 220px;
+  --row-h: 34px;          /* details row height */
+  --row-h-compact: 24px;
+  --radius: 4px;
+  --radius-lg: 8px;
+
+  /* light palette */
+  --bg-window: #f3f3f3;         /* mica-ish window background */
+  --bg-content: #ffffff;        /* item view background */
+  --bg-layer: #fbfbfb;          /* bars */
+  --bg-flyout: #f9f9f9;         /* menus, dialogs (acrylic stand-in) */
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --bg-selected: #cce8ff;
+  --bg-selected-inactive: #d9d9d9;
+  --bg-selected-hover: #b8dcf5;
+  --stroke: rgba(0, 0, 0, 0.0803);
+  --stroke-strong: rgba(0, 0, 0, 0.16);
+  --divider: rgba(0, 0, 0, 0.0803);
+  --text-primary: #1b1b1b;
+  --text-secondary: rgba(27, 27, 27, 0.61);
+  --text-disabled: rgba(27, 27, 27, 0.36);
+  --text-on-accent: #ffffff;
+  --accent: #0067c0;
+  --accent-light: #0078d4;
+  --accent-selection: #0078d4;
+  --shadow-flyout: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0,0,0,.12);
+  --shadow-dialog: 0 32px 64px rgba(0, 0, 0, 0.19), 0 2px 21px rgba(0, 0, 0, 0.15);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.35);
+  --tab-active-bg: var(--bg-layer);
+  --tab-inactive-bg: transparent;
+  --progress-green: #26a914;
+  --danger: #c42b1c;
+}
+
+:root[data-theme="dark"] {
+  --bg-window: #202020;
+  --bg-content: #191919;
+  --bg-layer: #2b2b2b;
+  --bg-flyout: #2c2c2c;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-selected: #2d4a5e;
+  --bg-selected-inactive: #404040;
+  --bg-selected-hover: #35586f;
+  --stroke: rgba(255, 255, 255, 0.0698);
+  --stroke-strong: rgba(255, 255, 255, 0.16);
+  --divider: rgba(255, 255, 255, 0.0837);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.36);
+  --accent: #4cc2ff;
+  --accent-light: #60cdff;
+  --accent-selection: #0078d4;
+  --shadow-flyout: 0 8px 16px rgba(0, 0, 0, 0.26), 0 0 2px rgba(0,0,0,.22);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.35);
+  --progress-green: #6ccb5f;
+  --danger: #ff99a4;
+}

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' liqicon: liqthumb:; img-src 'self' liqicon: liqthumb: data:; style-src 'self' 'unsafe-inline'">
+  <title>LiqExplorer</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/chrome.css">
+  <link rel="stylesheet" href="styles/views.css">
+  <link rel="stylesheet" href="styles/nav.css">
+  <link rel="stylesheet" href="styles/menus.css">
+  <link rel="stylesheet" href="styles/dialogs.css">
+</head>
+<body>
+  <div id="app">
+    <div id="titlebar"></div>
+    <div id="navrow"></div>
+    <div id="commandbar"></div>
+    <div id="main">
+      <div id="navpane"></div>
+      <div id="navpane-splitter"></div>
+      <div id="viewhost"></div>
+      <div id="sidepane" hidden></div>
+    </div>
+    <div id="statusbar"></div>
+  </div>
+  <div id="menu-layer"></div>
+  <div id="dialog-layer"></div>
+  <div id="ops-flyout"></div>
+  <script src="index.js"></script>
+</body>
+</html>

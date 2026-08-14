@@ -381,6 +381,7 @@ export class App {
       this.emit('ops-changed', this.ops)
     })
     liq.on(PUSH.opConflict, (c: ConflictInfo) => this.emit('op-conflict', c))
+    liq.on(PUSH.opPassword, (r: unknown) => this.emit('op-password', r))
     liq.on(PUSH.undoChanged, (u: UndoInfo) => { this.undoInfo = u; this.emit('undo-changed', u) })
     liq.on(PUSH.openPathRequest, (d: { path: string }) => this.newTab(d.path))
 

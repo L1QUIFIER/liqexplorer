@@ -7,6 +7,7 @@ import { mountConfirm } from './confirm'
 import { mountProperties } from './properties'
 import { mountOpenWith } from './openwith'
 import { mountOptions } from './options'
+import { mountPassword } from './password'
 
 export function mountDialogs(): void {
   mountOps()
@@ -15,6 +16,7 @@ export function mountDialogs(): void {
   mountProperties()
   mountOpenWith()
   mountOptions()
+  mountPassword()
 }
 
 // ---------------------------------------------------------------- modal stack

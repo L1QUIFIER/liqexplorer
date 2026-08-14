@@ -567,14 +567,15 @@ export function mountViewHost(root: HTMLElement): void {
     if (bandRAF) { cancelAnimationFrame(bandRAF); bandRAF = 0 }
   }
 
-  function startBand(e: MouseEvent): void {
+  /** onClick runs when the press never moved far enough to become a band —
+   *  a press on row whitespace must still select that row (Explorer). */
+  function startBand(e: MouseEvent, onClick?: () => void): void {
     const t = tab()
     if (!t) return
     bandStart = canvasPointFromClient(e.clientX, e.clientY)
     const preserve = e.ctrlKey || e.shiftKey
     bandBase = preserve ? new Set(t.selection) : new Set()
     bandToggle = e.ctrlKey
-    if (!preserve && t.selection.size) t.setSelection([])
     bandActive = false
     const move = (ev: MouseEvent) => {
       bandLast = { x: ev.clientX, y: ev.clientY }
@@ -582,6 +583,9 @@ export function mountViewHost(root: HTMLElement): void {
         const p = canvasPointFromClient(ev.clientX, ev.clientY)
         if (!bandStart || (Math.abs(p.x - bandStart.x) < 4 && Math.abs(p.y - bandStart.y) < 4)) return
         bandActive = true
+        // clearing is deferred to here so an un-moved press keeps the selection
+        // for onClick to act on
+        if (!preserve && t.selection.size) t.setSelection([])
         band.hidden = false
         if (!bandRAF) bandRAF = requestAnimationFrame(bandLoop)
       }
@@ -590,7 +594,9 @@ export function mountViewHost(root: HTMLElement): void {
     const up = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
+      const wasBand = bandActive
       cancelBand()
+      if (!wasBand) onClick?.()
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
@@ -645,18 +651,34 @@ export function mountViewHost(root: HTMLElement): void {
       }
       if (e.button === 0) {
         cancelSlowRename()
-        if (e.shiftKey) {
-          let aV = visIndexOf(t.anchorPath)
-          const iV = hit.item.vIndex ?? 0
-          if (aV < 0) { aV = iV; t.anchorPath = path }
-          const range = rangePaths(aV, iV)
-          t.setSelection(e.ctrlKey ? new Set([...t.selection, ...range]) : range, path)
-        } else if (e.ctrlKey) {
-          const sel = new Set(t.selection)
-          if (sel.has(path)) sel.delete(path); else sel.add(path)
-          t.anchorPath = path // Ctrl+click moves the pivot (Explorer)
-          t.setSelection(sel, path)
-        } else if (t.selection.has(path)) {
+        const applyClick = (): void => {
+          if (e.shiftKey) {
+            let aV = visIndexOf(t.anchorPath)
+            const iV = hit.item.vIndex ?? 0
+            if (aV < 0) { aV = iV; t.anchorPath = path }
+            const range = rangePaths(aV, iV)
+            t.setSelection(e.ctrlKey ? new Set([...t.selection, ...range]) : range, path)
+          } else if (e.ctrlKey) {
+            const sel = new Set(t.selection)
+            if (sel.has(path)) sel.delete(path); else sel.add(path)
+            t.anchorPath = path // Ctrl+click moves the pivot (Explorer)
+            t.setSelection(sel, path)
+          } else {
+            t.anchorPath = path
+            t.setSelection([path], path)
+          }
+        }
+        // Explorer starts a rubber band from the whitespace of a full-width row
+        // (anything that is not the icon, label or checkbox) — dragging there
+        // must select across items, not drag the file. A press that never moves
+        // still selects the row, so plain/Ctrl/Shift clicking anywhere works.
+        const onHotspot = !!(e.target as HTMLElement).closest?.('.vh-icon, .vh-label, .vh-check, .vh-thumbimg')
+        if (!onHotspot && hit.el.classList.contains('vh-row')) {
+          e.preventDefault()          // stops the row's native HTML5 drag
+          startBand(e, applyClick)
+          return
+        }
+        if (!e.shiftKey && !e.ctrlKey && t.selection.has(path)) {
           // defer: may become a drag of the whole selection, or a slow-rename click
           deferred = {
             path,
@@ -666,8 +688,7 @@ export function mountViewHost(root: HTMLElement): void {
           }
           if (t.focusPath !== path) t.setSelection([...t.selection], path)
         } else {
-          t.anchorPath = path
-          t.setSelection([path], path)
+          applyClick()
         }
       }
       return
@@ -676,7 +697,8 @@ export function mountViewHost(root: HTMLElement): void {
     // empty area
     if (e.button === 0) {
       cancelSlowRename()
-      startBand(e)
+      // clicking empty space without dragging clears the selection (Explorer)
+      startBand(e, () => { if (!e.ctrlKey && !e.shiftKey && t.selection.size) t.setSelection([]) })
     } else if (e.button === 2) {
       if (t.selection.size) t.selectNone()
     }

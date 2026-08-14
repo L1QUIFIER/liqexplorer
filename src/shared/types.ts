@@ -99,7 +99,25 @@ export interface OpRequest {
 }
 
 export type OpStatus = 'queued' | 'enumerating' | 'running' | 'paused'
-  | 'conflict' | 'done' | 'error' | 'cancelled'
+  | 'conflict' | 'password' | 'done' | 'error' | 'cancelled'
+
+/** An encrypted archive needs a password mid-operation (mirrors ConflictInfo). */
+export interface PasswordRequest {
+  opId: number
+  reqId: number
+  archivePath: string
+  archiveName: string
+  /** 1 on the first ask; higher after a wrong password */
+  attempt: number
+}
+
+export interface PasswordResolution {
+  opId: number
+  reqId: number
+  /** null = skip this archive; the engine records it as a failure */
+  password: string | null
+  applyToAll: boolean
+}
 
 export interface OpProgress {
   opId: number
@@ -239,10 +257,25 @@ export interface AppSettings {
   foldersFirst: boolean
   defaultView: FolderViewState
   navExpandToCurrent: boolean
-  openTo: 'home' | 'lastSession' | string
+  /** 'home' = the Home page (home://), 'homeFolder' = ~, 'lastSession', or a path */
+  openTo: 'home' | 'homeFolder' | 'lastSession' | string
   confirmDelete: boolean          // for permanent delete
   confirmTrash: boolean           // Windows default: off
   rememberPerFolder: boolean
+  // --- Home page (Win11 Folder Options > Privacy) ---
+  showRecent: boolean             // list recent files on Home
+  showFrequent: boolean           // auto-promote frequently used folders into Quick access
+  // --- search index (all opt-in; plocate cannot cover the CIFS share) ---
+  indexEnabled: boolean
+  /** folders to index; empty = home only */
+  indexRoots: string[]
+  /** glob-ish substrings to skip (node_modules, .git, .cache ...) */
+  indexExcludes: string[]
+  indexHidden: boolean
+  /** use the index for search when it covers the searched folder */
+  searchUseIndex: boolean
+  /** re-scan interval in minutes; 0 = only on demand */
+  indexRefreshMins: number
 }
 
 export const DEFAULT_VIEW_STATE: FolderViewState = {
@@ -277,6 +310,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   confirmDelete: true,
   confirmTrash: false,
   rememberPerFolder: true,
+  showRecent: true,
+  showFrequent: true,
+  indexEnabled: false,
+  indexRoots: [],
+  indexExcludes: ['/node_modules/', '/.git/', '/.cache/', '/.local/share/Trash/'],
+  indexHidden: false,
+  searchUseIndex: true,
+  indexRefreshMins: 60,
 }
 
 // ---------- misc ----------
@@ -293,4 +334,48 @@ export interface DriveDetail {
 }
 
 /** Sort comparator contract: natural sort, case-insensitive, digit runs numeric. */
-export const VIRTUAL_SCHEMES = ['trash://', 'computer://', 'search://'] as const
+export const VIRTUAL_SCHEMES = ['home://', 'trash://', 'computer://', 'search://', 'archive://'] as const
+
+/** archive://<absolute archive path>!/<inner path> — Explorer's zip-as-folder */
+export const ARCHIVE_SCHEME = 'archive://'
+
+// ---------- Home page (Quick access / Favorites / Recent) ----------
+
+/** A user-favorited file or folder. Folders also appear in Quick access. */
+export interface FavoriteEntry {
+  path: string
+  /** display name (defaults to basename, user-renamable later) */
+  name: string
+  isDir: boolean
+  addedAt: number
+}
+
+/** An entry from ~/.local/share/recently-used.xbel (shared with Nemo/GTK). */
+export interface RecentEntry {
+  path: string
+  name: string
+  mime: string
+  /** epoch ms of the last visit */
+  visitedAt: number
+  /** parent folder, for the "Folder path" column */
+  dir: string
+}
+
+// ---------- search index ----------
+
+export type IndexState = 'off' | 'idle' | 'scanning' | 'ready' | 'error'
+
+export interface IndexStatus {
+  state: IndexState
+  /** roots currently covered by the index */
+  roots: string[]
+  files: number
+  dirs: number
+  /** epoch ms of the last completed build */
+  lastBuilt: number
+  /** on-disk size of the index database */
+  dbBytes: number
+  /** live scan progress (present while state === 'scanning') */
+  scanning?: { root: string; seen: number }
+  error?: string
+}

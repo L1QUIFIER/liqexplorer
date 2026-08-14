@@ -5,7 +5,7 @@
   cdp.py eval 'EXPR'        evaluate JS in the page (awaits promises), print JSON result
   cdp.py shot OUT.png       capture the rendered frame (works where X `import` shows black)
   cdp.py console [SECS]     dump console messages + uncaught exceptions for SECS (default 2)
-  cdp.py click X Y [right|dbl]
+  cdp.py click X Y [right|dbl] [ctrl|shift|alt]
   cdp.py move X Y [left|right]   mouse move; the button name keeps it held (drag)
   cdp.py press X Y [right]       button down only
   cdp.py release X Y [right]     button up only
@@ -95,25 +95,28 @@ def main():
     elif cmd in ('click', 'move', 'press', 'release'):
         x, y = float(sys.argv[2]), float(sys.argv[3])
         opts = sys.argv[4:]
+        mods = sum({'alt': 1, 'ctrl': 2, 'shift': 8}[m] for m in opts if m in ('alt', 'ctrl', 'shift'))
         if cmd == 'move':
             button = 'right' if 'right' in opts else ('left' if 'left' in opts else 'none')
             # buttons bitmask keeps a held button pressed across the move (drags)
             mask = 2 if button == 'right' else (1 if button == 'left' else 0)
             send(ws, 'Input.dispatchMouseEvent', {
-                'type': 'mouseMoved', 'x': x, 'y': y, 'button': button, 'buttons': mask})
+                'type': 'mouseMoved', 'x': x, 'y': y, 'button': button, 'buttons': mask,
+                'modifiers': mods})
         elif cmd in ('press', 'release'):
             button = 'right' if 'right' in opts else 'left'
             send(ws, 'Input.dispatchMouseEvent', {
                 'type': 'mousePressed' if cmd == 'press' else 'mouseReleased',
                 'x': x, 'y': y, 'button': button, 'buttons': 2 if button == 'right' else 1,
-                'clickCount': 1})
+                'clickCount': 1, 'modifiers': mods})
         else:
             button = 'right' if 'right' in opts else 'left'
             count = 2 if 'dbl' in opts else 1
             for n in range(count):
                 for t in ('mousePressed', 'mouseReleased'):
                     send(ws, 'Input.dispatchMouseEvent', {
-                        'type': t, 'x': x, 'y': y, 'button': button, 'clickCount': n + 1})
+                        'type': t, 'x': x, 'y': y, 'button': button, 'clickCount': n + 1,
+                        'modifiers': mods})
     elif cmd == 'key':
         name = sys.argv[2].lower()
         mods = sum({'alt': 1, 'ctrl': 2, 'shift': 8}[m] for m in sys.argv[3:])

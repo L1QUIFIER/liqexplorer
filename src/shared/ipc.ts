@@ -24,6 +24,9 @@ export const PUSH = {
   themeChanged: 'liqpush:theme-changed',    // 'light' | 'dark'
   openPathRequest: 'liqpush:open-path',     // { path } (second instance / cli)
   windowState: 'liqpush:window-state',      // { maximized: boolean }
+  favoritesChanged: 'liqpush:favorites-changed', // FavoriteEntry[]
+  indexStatus: 'liqpush:index-status',      // IndexStatus
+  opPassword: 'liqpush:op-password',        // PasswordRequest
 } as const
 
 /** The API surface preload exposes as window.liq */

@@ -102,7 +102,16 @@ function startInotify(rec: WatchRec): void {
       if (eventType === 'rename') rec.sawRename = true
       if (!rec.debounce) rec.debounce = setTimeout(() => flushLocal(rec), DEBOUNCE_MS)
     })
-  } catch {
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code === 'EMFILE' || code === 'ENFILE' || code === 'ENOSPC') {
+      // inotify is exhausted machine-wide (this box caps user instances at 128
+      // and a desktop full of apps reaches it). Silently never refreshing is
+      // the worst outcome, so degrade to the same mtime poll the network
+      // mounts use instead of leaving the folder unwatched.
+      startPolling(rec)
+      return
+    }
     // dir vanished between listing and watch — the listing itself reports errors
     return
   }

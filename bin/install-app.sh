@@ -24,6 +24,7 @@ refresh_caches() {
 
 if [ "${1:-}" = "--undo" ]; then
   rm -f "$APPS/liqexplorer.desktop"
+  rm -f "$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/liqexplorer.desktop"
   for size in "${SIZES[@]}"; do
     rm -f "$ICONS/${size}x${size}/apps/liqexplorer.png"
   done
@@ -38,13 +39,19 @@ for size in "${SIZES[@]}"; do
 done
 install -Dm644 "$PROJ/assets/icon.svg" "$ICONS/scalable/apps/liqexplorer.svg"
 
+# Launch through bash, never `Exec=…/run.sh` directly: the project lives on a
+# CIFS share mounted with the exec bit forced off, so the script can be READ but
+# never executed, and a direct Exec= fails with "Permission denied".
+LAUNCH="/bin/bash \"$PROJ/bin/run.sh\""
+
 # MimeType is declared so LiqExplorer shows up under "Open with" for folders —
 # that alone does NOT make it the default (install-default.sh does that).
-cat > "$APPS/liqexplorer.desktop" <<EOF
+write_entry() {
+  cat > "$1" <<EOF
 [Desktop Entry]
 Name=LiqExplorer
 Comment=Windows 11 style file manager
-Exec=$PROJ/bin/run.sh %U
+Exec=$LAUNCH %U
 Icon=liqexplorer
 Terminal=false
 Type=Application
@@ -56,13 +63,36 @@ Actions=open-home;open-computer;
 
 [Desktop Action open-home]
 Name=Home
-Exec=$PROJ/bin/run.sh $HOME
+Exec=$LAUNCH "$HOME"
 
 [Desktop Action open-computer]
 Name=Computer
-Exec=$PROJ/bin/run.sh /
+Exec=$LAUNCH /
 EOF
+}
+
+write_entry "$APPS/liqexplorer.desktop"
+
+# Desktop shortcut. Cinnamon (nemo-desktop) only runs a .desktop dropped on the
+# desktop if it is BOTH executable and marked trusted — otherwise it shows the
+# "untrusted application launcher" refusal. ~/Desktop is on local disk, so
+# unlike the share the exec bit sticks here.
+DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
+if [ -d "$DESKTOP_DIR" ]; then
+  write_entry "$DESKTOP_DIR/liqexplorer.desktop"
+  chmod +x "$DESKTOP_DIR/liqexplorer.desktop"
+  # gio metadata goes through gvfsd-metadata on the session bus; without the bus
+  # (e.g. run from a detached shell) `gio set` silently does nothing, so fall
+  # back to the well-known session bus path for this user.
+  [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] ||
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+  gio set "$DESKTOP_DIR/liqexplorer.desktop" metadata::trusted true 2>/dev/null || true
+  gio set "$DESKTOP_DIR/liqexplorer.desktop" metadata::nemo-trusted true 2>/dev/null || true
+  # nemo-desktop re-reads the file when its mtime changes
+  touch "$DESKTOP_DIR/liqexplorer.desktop"
+fi
 
 refresh_caches
-echo "Installed the LiqExplorer menu entry and icons (default file manager unchanged)."
+echo "Installed the LiqExplorer menu entry, desktop shortcut and icons"
+echo "(default file manager unchanged)."
 echo "Remove with: $PROJ/bin/install-app.sh --undo"

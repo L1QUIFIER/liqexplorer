@@ -10,6 +10,7 @@ import { mountHome } from './views/home'
 import { mountMenus } from './menus/context-menus'
 import { mountDialogs } from './dialogs/dialogs'
 import { mountKeyboard } from './core/keyboard'
+import { mountScrollHover } from './core/scrollhover'
 
 async function boot() {
   ;(window as unknown as { app: typeof app }).app = app  // for CDP-driven testing
@@ -36,6 +37,7 @@ async function boot() {
   mountMenus()
   mountDialogs()
   mountKeyboard()
+  mountScrollHover()
 }
 
 boot().catch(err => {

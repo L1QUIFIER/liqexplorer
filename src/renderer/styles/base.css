@@ -42,8 +42,9 @@ textarea,
 
    Per-surface knobs (set --sb-* on the scrolling element):
      --sb-size        gutter width           (default 16px)
-     --sb-inset       rest thumb padding     (6px thumb)
-     --sb-inset-hover hover thumb padding    (12px thumb)
+     --sb-inset-hover thumb padding          (sets the 12px thumb box; the
+                                              rest-state 6px rail is painted
+                                              inside it, see the thumb rule)
      --sb-btn-h       arrow button size      (0 disables arrows)
    ============================================================ */
 
@@ -57,11 +58,24 @@ textarea,
 ::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-resizer { display: none; }
 
+/* Chromium fixes scrollbar GEOMETRY when the scrollbar is first laid out:
+   changing border-width (or width) on :hover is silently ignored, while paint
+   properties do update — verified with xprop-style pixel probes on :99. So the
+   thumb keeps a constant 12px content box and the Win11 "thin rail widens on
+   hover" is painted with a gradient: a centred 6px stripe at rest, edge to edge
+   on hover. Colour states must therefore also be gradients, or they would be
+   hidden behind this background-image. */
 ::-webkit-scrollbar-thumb {
-  background-color: var(--sb-thumb);
   background-clip: content-box;
-  border: var(--sb-inset) solid transparent;
+  border: var(--sb-inset-hover) solid transparent;
   border-radius: var(--sb-radius);
+  background-color: transparent;
+  background-image: linear-gradient(90deg,
+    transparent 25%, var(--sb-thumb) 25%, var(--sb-thumb) 75%, transparent 75%);
+}
+::-webkit-scrollbar-thumb:horizontal {
+  background-image: linear-gradient(180deg,
+    transparent 25%, var(--sb-thumb) 25%, var(--sb-thumb) 75%, transparent 75%);
 }
 ::-webkit-scrollbar-thumb:vertical { min-height: 28px; }
 ::-webkit-scrollbar-thumb:horizontal { min-width: 28px; }
@@ -81,26 +95,36 @@ textarea,
 ::-webkit-scrollbar-button:horizontal:start:increment,
 ::-webkit-scrollbar-button:horizontal:end:decrement { display: none; }
 
-/* ---- expanded state: pointer anywhere inside the scrolling element ---- */
-*:hover::-webkit-scrollbar-thumb {
-  background-color: var(--sb-thumb-strong);
-  border-width: var(--sb-inset-hover);
+/* ---- expanded state: pointer anywhere inside the scrolling element.
+   Chromium does not re-evaluate *:hover for scrollbar pseudo-elements (the
+   thumb only reacts to the pointer being ON it), so scrollhover.ts toggles
+   .sb-hot on the scrolling element instead. ---- */
+.sb-hot::-webkit-scrollbar-thumb {
+  background-image: linear-gradient(var(--sb-thumb-strong), var(--sb-thumb-strong));
 }
-*:hover::-webkit-scrollbar-track { background-color: var(--sb-track); }
-*:hover::-webkit-scrollbar-button { background-color: var(--sb-track); }
-*:hover::-webkit-scrollbar-button:vertical:start:decrement { background-image: var(--sb-arrow-up); }
-*:hover::-webkit-scrollbar-button:vertical:end:increment { background-image: var(--sb-arrow-down); }
-*:hover::-webkit-scrollbar-button:horizontal:start:decrement { background-image: var(--sb-arrow-left); }
-*:hover::-webkit-scrollbar-button:horizontal:end:increment { background-image: var(--sb-arrow-right); }
+.sb-hot::-webkit-scrollbar-track { background-color: var(--sb-track); }
+.sb-hot::-webkit-scrollbar-button { background-color: var(--sb-track); }
+.sb-hot::-webkit-scrollbar-button:vertical:start:decrement { background-image: var(--sb-arrow-up); }
+.sb-hot::-webkit-scrollbar-button:vertical:end:increment { background-image: var(--sb-arrow-down); }
+.sb-hot::-webkit-scrollbar-button:horizontal:start:decrement { background-image: var(--sb-arrow-left); }
+.sb-hot::-webkit-scrollbar-button:horizontal:end:increment { background-image: var(--sb-arrow-right); }
 
 /* ---- pointer on the thumb / arrows: darken, then darken again on press ---- */
-::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
-::-webkit-scrollbar-thumb:active { background-color: var(--sb-thumb-active); }
+::-webkit-scrollbar-thumb:hover {
+  background-image: linear-gradient(var(--sb-thumb-hover), var(--sb-thumb-hover));
+}
+::-webkit-scrollbar-thumb:active {
+  background-image: linear-gradient(var(--sb-thumb-active), var(--sb-thumb-active));
+}
 ::-webkit-scrollbar-button:hover { background-color: var(--sb-btn-hover-bg); }
 ::-webkit-scrollbar-button:active { background-color: var(--sb-btn-active-bg); }
 
-/* the window-inactive rail stays quiet, like Win11 */
-::-webkit-scrollbar-thumb:window-inactive { background-color: var(--sb-thumb); }
+/* the window-inactive rail stays quiet, like Win11 (gradient, not colour —
+   see the note on the thumb rule above) */
+::-webkit-scrollbar-thumb:window-inactive {
+  background-image: linear-gradient(90deg,
+    transparent 25%, var(--sb-thumb) 25%, var(--sb-thumb) 75%, transparent 75%);
+}
 
 /* compact tier: narrower gutter, no arrows — flyouts and small embedded lists.
    Everything else (file view, nav pane, details pane, dialog bodies) keeps the

@@ -87,14 +87,14 @@ export const actions = {
    * The destination policy itself lives in the main-process archive backend;
    * the renderer only says which verb the user picked.
    */
-  async extract(tab = app.activeTab, mode: 'here' | 'named' | 'to' = 'here', dest?: string): Promise<void> {
+  async extract(tab = app.activeTab, mode: 'auto' | 'named' | 'to' = 'auto', dest?: string): Promise<void> {
     const sel = tab.selectedEntries().filter(e => isArchiveName(e.name))
     if (!sel.length) return
-    await liq.startOp({
-      kind: 'extract',
-      sources: sel.map(e => e.path),
+    // the backend groups multi-part sets and applies the destination policy
+    await liq.invoke('extractArchives', {
+      archives: sel.map(e => e.path),
+      mode,
       dest: mode === 'to' ? (dest ?? tab.path) : tab.path,
-      extractMode: mode,
     })
   },
 

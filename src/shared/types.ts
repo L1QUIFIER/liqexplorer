@@ -98,9 +98,10 @@ export interface OpRequest {
   dest?: string
   /** compress: archive format */
   format?: 'zip' | 'tar.gz' | '7z'
-  /** extract: 'here' applies single-root policy, 'named' always makes
-   *  <archive>/, 'to' uses dest verbatim ("Extract All...") */
-  extractMode?: 'here' | 'named' | 'to'
+  /** extract: 'auto' applies single-root policy (one top-level entry extracts
+   *  in place, several get wrapped), 'named' always makes <archive>/, 'to'
+   *  uses dest verbatim ("Extract All...") */
+  extractMode?: 'auto' | 'named' | 'to'
   /** extract: password supplied up-front (e.g. remembered for this set) */
   password?: string
 }

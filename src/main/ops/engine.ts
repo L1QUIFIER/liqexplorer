@@ -30,7 +30,7 @@ import type {
 import { broadcast } from '../windows'
 import * as trash from '../platform/trash'
 import * as undo from './undo'
-import { runCompress, runExtract, type ArchiveCtx } from './archive'
+import { bindEngine, cancelPasswordPrompt, runCompress, runExtract, type ArchiveCtx } from './archive'
 
 const HW = 1024 * 1024                 // 1MB stream chunks: pause/cancel stay responsive
 const PROGRESS_MS = 200
@@ -110,6 +110,10 @@ export async function startOp(wc: WebContents, req: OpRequest): Promise<number> 
   return op.id
 }
 
+// archive.ts starts extract ops from its own IPC verbs; injected rather than
+// imported to keep the two modules acyclic
+bindEngine(startOp)
+
 /** Run an op outside the recording path (undo/redo replay). Resolves when it finishes. */
 export function runInternal(req: OpRequest, pairs?: MovePair[]): Promise<OpResult> {
   return enqueue(req, { record: false, pairs }).done
@@ -144,6 +148,7 @@ export function cancelOp(id: number): void {
   drainWaiters(op)
   const pc = op.pendingConflict
   if (pc) pc.resolve({ opId: op.id, conflictId: pc.conflictId, choice: 'cancel', applyToAll: false })
+  cancelPasswordPrompt(op.id)   // an archive waiting on a password must not block the queue
   if (op.status === 'queued') {
     // never started — finalize immediately
     const i = pending.indexOf(op)
@@ -330,7 +335,8 @@ function sampleSpeed(op: Op): void {
   const inst = Math.max(0, (units - op.lastTickUnits) / dt)
   op.lastTickUnits = units
   op.lastTickTime = now
-  const stalled = op.status === 'paused' || op.status === 'conflict' || op.status === 'queued'
+  const stalled = op.status === 'paused' || op.status === 'conflict'
+    || op.status === 'password' || op.status === 'queued'
   const sample = stalled ? 0 : inst
   op.emaSpeed = op.emaSpeed <= 0 ? sample : op.emaSpeed * 0.7 + sample * 0.3
   op.speedHistory.push(Math.round(sample))
@@ -1076,21 +1082,54 @@ async function execSymlink(op: Op): Promise<void> {
 
 // ---------------- archives ----------------
 
+/**
+ * Move the results of an extraction out of its temp folder and into the
+ * destination, reusing the normal conflict-aware move so the user gets the
+ * usual Replace / Skip / Keep both dialog. Everything here is a same-device
+ * rename; the bytes were already counted as they were extracted, so the
+ * progress counters are restored afterwards instead of being counted twice.
+ */
+async function moveExtracted(op: Op, fromDir: string, toDir: string): Promise<string[]> {
+  const bytes = op.bytesDone
+  const items = op.itemsDone
+  const created: string[] = []
+  try {
+    for (const n of await fsp.readdir(fromDir)) {
+      checkCancel(op)
+      await pauseGate(op)
+      const r = await moveEntry(op, path.join(fromDir, n), path.join(toDir, n), true)
+      if (r.moved && r.finalDst && !r.merged) created.push(r.finalDst)
+    }
+  } finally {
+    op.bytesDone = bytes
+    op.itemsDone = items
+  }
+  return created
+}
+
 async function execArchive(op: Op): Promise<void> {
   const dest = op.req.dest
   if (!dest) throw new Error('No destination folder was given.')
   op.itemsTotal = op.req.sources.length
-  op.bytesTotal = 0                       // indeterminate — file-roller owns the real progress
-  setStatus(op, 'running')
   const ctx: ArchiveCtx = {
+    opId: op.id,
+    sender: op.sender,
     sources: op.req.sources,
     dest,
     format: op.req.format,
     isCancelled: () => op.cancelled,
+    checkCancel: () => checkCancel(op),
+    pauseGate: () => pauseGate(op),
+    setStatus: s => setStatus(op, s),
     setCurrent: f => { op.currentFile = f },
+    setTotals: (items, bytes) => { op.itemsTotal = items; op.bytesTotal = bytes },
+    setBytes: n => { op.bytesDone = n },
     itemDone: () => { op.itemsDone++ },
     fail: (p, e) => fail(op, p, e),
     setChild: c => { op.child = c },
+    uniqueName: (dir, base, isDir) => uniqueSuffixName(dir, base, isDir),
+    moveInto: (from, to) => moveExtracted(op, from, to),
+    recordCreated: p => { op.created.push(p) },
   }
   if (op.kind === 'compress') {
     const r = await runCompress(ctx)

@@ -19,6 +19,7 @@ import * as settings from './state/settings'
 import * as viewstate from './state/viewstate'
 import * as drag from './platform/drag'
 import './platform/favorites'   // self-registers listFavorites/addFavorite/listRecent/...
+import * as archive from './ops/archive'
 import { createWindow } from './windows'
 
 type Handler = (...args: any[]) => unknown
@@ -94,7 +95,8 @@ const routes: Record<string, Handler> = {
   },
   isMaximized: (e) => BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false,
   startNativeDrag: (e, paths) => drag.startDrag(e.sender, paths),
-  archiveList: (_e, p) => apps.archiveList(p),
+  // real listing from the 7z backend (apps.archiveList was a [] stub)
+  archiveList: (_e, p) => archive.listArchive(p),
 }
 
 function sender(e: Electron.IpcMainInvokeEvent) { return e.sender }

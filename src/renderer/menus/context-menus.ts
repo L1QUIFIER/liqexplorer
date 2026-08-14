@@ -46,16 +46,11 @@ const I = {
 
 // ---------- shared helpers ----------
 
-/** "Extract All..." — pick a destination, defaulting to <archive>/ like Explorer */
+/** "Extract All..." — Explorer asks where to put it; default is <archive>/ */
 async function extractAll(tab: Tab, entry: FileEntry): Promise<void> {
   const suggested = `${tab.path}/${archiveStem(entry.name)}`
-  app.emit('show-prompt', {
-    title: 'Extract Compressed (Zipped) Folders',
-    message: 'Files will be extracted to this folder:',
-    value: suggested,
-    okLabel: 'Extract',
-    onOk: (dest: string) => { void actions.extract(tab, 'to', dest) },
-  })
+  const dest = await liq.invoke('pickFolder', suggested) as string | null
+  if (dest) await actions.extract(tab, 'to', dest)
 }
 
 const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
@@ -338,7 +333,7 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
       { separator: true },
       ...(isArchive ? [
         { label: 'Extract All...', onClick: () => { void extractAll(tab, single) } },
-        { label: 'Extract here', onClick: () => { void actions.extract(tab, 'here') } },
+        { label: 'Extract here', onClick: () => { void actions.extract(tab, 'auto') } },
         {
           label: `Extract to ${archiveStem(single.name)}\\`,
           onClick: () => { void actions.extract(tab, 'named') },

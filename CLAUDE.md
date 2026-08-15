@@ -21,7 +21,10 @@ If the checkout lives on a CIFS/SMB share where binaries are not executable:
   `~/.cache/electron`), then staged off-share. Never try to run electron from node_modules.
 - Build output `dist/` is plain JS (nothing needs +x). Never commit it.
 
-On a normal local disk, plain `npm install` + `npm run build` + `npm start` is fine.
+On a normal local disk, prefer `bash bin/setup.sh` (handles modern npm
+install-script allowlists + Electron download), then `npm start`. Plain
+`npm install` + `npm run build` + `npm start` also works when npm still runs
+dependency postinstall scripts by default.
 
 ## Testing — never hijack the user's display
 

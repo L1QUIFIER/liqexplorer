@@ -4,7 +4,7 @@ Windows 11–style File Explorer for Linux.
 
 Tabs, command bar, breadcrumb address bar, navigation tree, details/icon views with sort & group, Explorer-style context menus, file ops with progress/conflict/undo, and desktop-compatible trash, clipboard, and thumbnails (via GIO/gvfs).
 
-> **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet. Best on **X11** (Cinnamon/GNOME/XFCE/MATE). Wayland works for browsing with limited clipboard interop.
+> **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet. Best on **X11** (Cinnamon/GNOME/XFCE/MATE/KDE). Wayland works for browsing with limited clipboard interop.
 
 
 ## Screenshots
@@ -24,17 +24,17 @@ Captured from a disposable demo profile (generic folders and stock-style photos 
 
 ## Requirements
 
-- Linux x86_64
-- Node.js 20+ (for building from source)
+- Linux x86_64 (Arch, Fedora, Debian/Ubuntu/Mint, openSUSE, …)
+- **Node.js 20 or 22 LTS** recommended (Node 25+ / bleeding-edge may work but is less tested)
 - **Required for full features:** `gio` (glib/gvfs), `python3` + GTK3 PyGObject, `ripgrep` (`rg`), `7z` (p7zip / 7-Zip)
 - Optional: `unrar` / `unar` (better RAR support), `udisksctl` (eject/power-off)
 
 ### Distro packages
 
-**Arch / Manjaro**
+**Arch / Manjaro / EndeavourOS**
 ```bash
 sudo pacman -S nodejs npm gvfs gtk3 python-gobject ripgrep p7zip
-# optional: unrar unarchiver udisks2
+# optional: unrar unarchiver udisks2 fuse2
 ```
 
 **Fedora**
@@ -54,10 +54,26 @@ Missing tools soft-fail (status bar warning + console log) instead of crashing �
 
 ## Try it (build from source)
 
+Use a **fresh clone of `main`** (or `git pull` if you already cloned — older checkouts are missing some scripts).
+
 ```bash
 git clone https://github.com/L1QUIFIER/liqexplorer.git
 cd liqexplorer
+git pull origin main
+bash bin/setup.sh
+npm start
+```
+
+`bin/setup.sh` runs `npm install`, approves Electron/esbuild install scripts on modern npm (11.16+ / 12 — common on Arch with new Node), downloads those binaries if they were skipped, then builds.
+
+Manual equivalent:
+
+```bash
 npm install
+# If npm warns that electron/esbuild install scripts were blocked:
+npm approve-scripts electron esbuild --no-allow-scripts-pin
+npm install
+bash bin/stage.sh
 npm run build
 npm start
 ```
@@ -76,22 +92,33 @@ bash bin/install-default.sh
 bash bin/install-default.sh --undo
 ```
 
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Missing script: "dist:appimage"` | Your clone is outdated — run `git pull origin main` (or re-clone). You do **not** need AppImage to try the app; use `npm start`. |
+| `install scripts blocked` for `electron` / `esbuild` | Run `bash bin/setup.sh` (or approve scripts as above), then `npm start`. |
+| Window never opens / sandbox errors | From-source launches already pass `--no-sandbox`. Re-run `bash bin/stage.sh && npm start` and check the terminal for errors. |
+| `electron` binary missing | `bash bin/stage.sh` (needs network once to download Electron into `~/.cache/electron`). |
+| Very new Node (25+) behaves oddly | Install Node 20 or 22 LTS and retry. |
+
 ## AppImage (optional packaging)
 
+Only after setup/build works with `npm start`:
+
 ```bash
-npm install
-npm run build
 npm run dist:appimage
 ```
 
-Output lands in `release/`. Requires `electron-builder` (pulled as a devDependency) and typical Linux packaging tools (`fuse` / AppImage runtime on the build host).
+Output lands in `release/`. Needs `electron-builder` (already a devDependency) and usually `fuse2`/`fuse` on the build host for local AppImage runs.
 
 ## Develop
 
 ```bash
-npm install
-npm run build
+bash bin/setup.sh
 npm start
+# or rebuild + start:
+npm run dev
 ```
 
 Scratch profile (does not touch your normal settings):
@@ -100,10 +127,11 @@ Scratch profile (does not touch your normal settings):
 LIQEXPLORER_TEST=1 npm start
 ```
 
-If the project lives on a CIFS/SMB share where binaries are not executable, use the CIFS-safe install and staging scripts documented in `CLAUDE.md`:
+If the checkout lives on a CIFS/SMB share where binaries are not executable:
 
 ```bash
 npm install --no-bin-links --ignore-scripts
+bash bin/stage.sh
 bash bin/build.sh
 bash bin/run.sh
 ```
@@ -124,6 +152,7 @@ bash bin/run.sh
 - **Theme:** XApp portal → GNOME `color-scheme` → Electron `nativeTheme`
 - **Clipboard:** full interop needs X11 + python3-gi; otherwise in-app paste still works
 - **Default handler undo:** restores the previous `xdg-mime` handler (Nemo/Nautilus/Dolphin/…)
+- **From-source Electron:** uses a staged copy under `~/.cache/liq-run/liqexplorer/` with `--no-sandbox` so Arch/Fedora/etc. can launch without setuid chrome-sandbox
 
 ## Roadmap
 

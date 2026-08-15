@@ -10,12 +10,20 @@
     "type": "git",
     "url": "https://github.com/L1QUIFIER/liqexplorer.git"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "setup": "bash bin/setup.sh",
     "build": "bash bin/build.sh",
     "start": "bash bin/run.sh",
     "dev": "bash bin/dev.sh",
     "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit",
     "dist:appimage": "npm run build && electron-builder --linux AppImage"
+  },
+  "allowScripts": {
+    "electron": true,
+    "esbuild": true
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

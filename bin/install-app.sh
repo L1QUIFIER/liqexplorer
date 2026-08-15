@@ -39,9 +39,8 @@ for size in "${SIZES[@]}"; do
 done
 install -Dm644 "$PROJ/assets/icon.svg" "$ICONS/scalable/apps/liqexplorer.svg"
 
-# Launch through bash, never `Exec=…/run.sh` directly: the project lives on a
-# CIFS share mounted with the exec bit forced off, so the script can be READ but
-# never executed, and a direct Exec= fails with "Permission denied".
+# Launch through bash so Exec= works even when the checkout is on a noexec
+# filesystem (common for network shares) where run.sh is readable but not +x.
 LAUNCH="/bin/bash \"$PROJ/bin/run.sh\""
 
 # MimeType is declared so LiqExplorer shows up under "Open with" for folders —
@@ -75,8 +74,7 @@ write_entry "$APPS/liqexplorer.desktop"
 
 # Desktop shortcut. Cinnamon (nemo-desktop) only runs a .desktop dropped on the
 # desktop if it is BOTH executable and marked trusted — otherwise it shows the
-# "untrusted application launcher" refusal. ~/Desktop is on local disk, so
-# unlike the share the exec bit sticks here.
+# "untrusted application launcher" refusal.
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 if [ -d "$DESKTOP_DIR" ]; then
   write_entry "$DESKTOP_DIR/liqexplorer.desktop"

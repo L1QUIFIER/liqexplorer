@@ -112,9 +112,26 @@ async function openFileLocation(p: string): Promise<void> {
 
 // ---------------------------------------------------------------- mount
 
-export function mountHome(root: HTMLElement): void {
-  const viewhost = document.getElementById('viewhost')
+/** One Home page is mounted per pane; the global favorite verbs belong to the
+ *  first of them only (see the bottom of mountHome). */
+let favoriteVerbsClaimed = false
+
+export interface HomeHostOpts {
+  /** Which Tab decides whether this Home page is showing. Defaults to the
+   *  focused pane; views/panes.ts pins one instance per pane. */
+  getTab?: () => Tab | null
+  /** The pane's file view, hidden while Home shows (they are twins). */
+  sibling?: HTMLElement | null
+  /** Called on any interaction, so the owning pane takes focus first — the
+   *  tile handlers below then navigate through app.activeTab as usual. */
+  onActivate?: () => void
+}
+
+export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
+  const viewhost = opts.sibling ?? document.getElementById('viewhost')
+  const myTab = (): Tab | null => (opts.getTab ? opts.getTab() : app.activeTab) ?? null
   root.innerHTML = ''
+  if (opts.onActivate) root.addEventListener('mousedown', () => opts.onActivate!(), true)
 
   const scroller = document.createElement('div')
   scroller.className = 'home-scroll'
@@ -275,41 +292,60 @@ export function mountHome(root: HTMLElement): void {
 
   const quickSec = makeSection('quick', 'Quick access')
 
-  /** pinned folders: GTK bookmarks + XDG user dirs, plus favorited folders */
-  function quickItems(): { path: string; name: string; icons: string[]; place: boolean }[] {
-    const out: { path: string; name: string; icons: string[]; place: boolean }[] = []
+  /** how (and whether) a Quick access tile can be removed again:
+   *  'place' = a GTK bookmark unpinPlace really can delete, 'favorite' = one of
+   *  ours. The six XDG user dirs are synthesised unconditionally by places.ts,
+   *  so unpinning one can never remove its tile no matter what the bookmarks
+   *  file says — for an unbookmarked dir it rewrote that file for nothing, and
+   *  for a bookmarked one it silently destroyed Nemo's sidebar entry while the
+   *  tile stayed put. Only `kind: 'pinned'` survives being unpinned. */
+  type Unpin = 'place' | 'favorite' | null
+  interface QuickItem { path: string; name: string; icons: string[]; unpin: Unpin }
+
+  function quickItems(): QuickItem[] {
+    const out: QuickItem[] = []
     const seen = new Set<string>()
     for (const p of places) {
       if (p.kind !== 'user-dir' && p.kind !== 'pinned') continue
       if (seen.has(p.path)) continue
       seen.add(p.path)
-      out.push({ path: p.path, name: p.label, icons: p.icons?.length ? p.icons : ['folder'], place: true })
+      out.push({
+        path: p.path, name: p.label,
+        icons: p.icons?.length ? p.icons : ['folder'],
+        unpin: p.kind === 'pinned' ? 'place' : null,
+      })
     }
     for (const f of favorites) {
       if (!f.isDir || seen.has(f.path)) continue
       seen.add(f.path)
-      out.push({ path: f.path, name: f.name, icons: ['folder'], place: false })
+      out.push({ path: f.path, name: f.name, icons: ['folder'], unpin: 'favorite' })
     }
     return out
   }
 
-  function folderMenu(path: string, isPlace: boolean): (x: number, y: number) => void {
+  function folderMenu(path: string, unpin: Unpin): (x: number, y: number) => void {
     return (x, y) => {
       const items: MenuItem[] = [
         { label: 'Open', onClick: () => navigate(path) },
         { label: 'Open in new tab', onClick: () => { void app.newTab(path, true) } },
-        { separator: true },
-        {
-          label: 'Unpin from Quick access',
-          onClick: () => {
-            if (isPlace) void liq.unpinPlace(path)
-            else void liq.invoke('removeFavorite', [path]).then(refresh)
+      ]
+      if (unpin) {
+        items.push(
+          { separator: true },
+          {
+            label: 'Unpin from Quick access',
+            onClick: () => {
+              if (unpin === 'place') void liq.unpinPlace(path)
+              else void liq.invoke('removeFavorite', [path]).then(refresh)
+            },
           },
-        },
+        )
+      }
+      items.push(
         { separator: true },
         { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => copyAsPath(path) },
         { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => app.emit('show-properties', [path]) },
-      ]
+      )
       showMenu(items, { x, y })
     }
   }
@@ -326,9 +362,10 @@ export function mountHome(root: HTMLElement): void {
     const grid = document.createElement('div')
     grid.className = 'home-tiles'
     for (const it of items) {
-      const tile = makeTile(it.name, it.icons, true)
+      // the pin badge now means what it says: only tiles that can be unpinned
+      const tile = makeTile(it.name, it.icons, it.unpin !== null)
       tile.title = it.path
-      wireItem(tile, { path: it.path, name: it.name, isDir: true, menu: folderMenu(it.path, it.place) })
+      wireItem(tile, { path: it.path, name: it.name, isDir: true, menu: folderMenu(it.path, it.unpin) })
       grid.appendChild(tile)
     }
     body.appendChild(grid)
@@ -351,7 +388,9 @@ export function mountHome(root: HTMLElement): void {
             }
           : {
               label: 'Add to Favorites',
-              onClick: () => { void liq.invoke('addFavorite', [path]).then(refresh) },
+              // Recent only ever lists files; say so rather than letting main
+              // guess isDir from the extension (see favorites.ts isDirSafe)
+              onClick: () => { void liq.invoke('addFavorite', [{ path, isDir: false }]).then(refresh) },
             },
       ]
       if (source === 'recent') {
@@ -481,19 +520,21 @@ export function mountHome(root: HTMLElement): void {
   let visible = false
 
   function sync(): void {
-    const isHome = app.activeTab?.path === HOME_URI
+    const t = myTab()
+    const isHome = !!t && t.path === HOME_URI
     root.hidden = !isHome
     if (viewhost) viewhost.hidden = isHome
     if (isHome && !visible) void refresh()           // always land on fresh data
     visible = isHome
   }
 
-  app.on('tab-navigated', (t: Tab) => { if (t === app.activeTab) sync() })
+  app.on('tab-navigated', (t: Tab) => { if (t === myTab()) sync() })
   app.on('tabs-changed', () => sync())
+  app.on('panes-changed', () => sync())              // split opened/closed
   // F5 / Refresh on Home: the tab has nothing to list, so re-pull our own data
   // (skipped right after a navigation, which already refreshed)
   app.on('tab-listing', (t: Tab) => {
-    if (t !== app.activeTab || t.path !== HOME_URI) return
+    if (t !== myTab() || t.path !== HOME_URI) return
     if (Date.now() - lastRefreshAt < 300) return
     void refresh()
   })
@@ -503,13 +544,22 @@ export function mountHome(root: HTMLElement): void {
     favorites = Array.isArray(list) ? list : []
     if (visible) { renderQuick(); renderFavorites() }
   })
-  // context-menu "Add to Favorites" (wired wherever the app emits it)
-  app.on('add-to-favorites', (paths: string[]) => {
-    void liq.invoke('addFavorite', paths).then(() => { if (visible) void refresh() })
-  })
-  app.on('remove-from-favorites', (paths: string[]) => {
-    void liq.invoke('removeFavorite', paths).then(() => { if (visible) void refresh() })
-  })
+  // context-menu "Add to Favorites" (wired wherever the app emits it). Items are
+  // { path, isDir } where the emitter knows the entry; bare paths still work.
+  //
+  // These two are GLOBAL commands, not per-page rendering: with a Home page
+  // mounted in each pane, only the first instance may run the IPC or every
+  // add/remove would fire twice. Both instances still redraw, because the main
+  // process broadcasts favoritesChanged after any write.
+  if (!favoriteVerbsClaimed) {
+    favoriteVerbsClaimed = true
+    app.on('add-to-favorites', (items: (string | { path: string; isDir: boolean })[]) => {
+      void liq.invoke('addFavorite', items).then(() => { if (visible) void refresh() })
+    })
+    app.on('remove-from-favorites', (items: (string | { path: string })[]) => {
+      void liq.invoke('removeFavorite', items).then(() => { if (visible) void refresh() })
+    })
+  }
 
   sync()
 }

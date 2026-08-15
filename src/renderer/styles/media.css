@@ -1,0 +1,704 @@
+/* Floating media viewer ("shadow player") + the popped-out window.
+   Loaded two ways: injected as a <link> by media/overlay.ts (so index.html
+   needs no entry) and linked directly by media/popout.html.
+
+   The panel is translucent on purpose — it floats over the file list rather
+   than replacing it, and the blur is what keeps the text underneath from
+   reading through the chrome. backdrop-filter is the expensive part on a
+   software renderer, so .is-opaque drops it (Options > View). */
+
+:root {
+  --mv-bg: rgba(249, 249, 249, 0.78);
+  --mv-bg-solid: #f6f6f6;
+  --mv-stage: rgba(0, 0, 0, 0.06);
+  --mv-rail: rgba(0, 0, 0, 0.18);
+  --mv-buf: rgba(0, 0, 0, 0.28);
+  --mv-nav-bg: rgba(255, 255, 255, 0.72);
+}
+:root[data-theme="dark"] {
+  --mv-bg: rgba(32, 32, 32, 0.76);
+  --mv-bg-solid: #202020;
+  --mv-stage: rgba(0, 0, 0, 0.35);
+  --mv-rail: rgba(255, 255, 255, 0.24);
+  --mv-buf: rgba(255, 255, 255, 0.34);
+  --mv-nav-bg: rgba(20, 20, 20, 0.66);
+}
+
+/* ------------------------------------------------------------- the panel */
+
+.mv-panel {
+  position: fixed;
+  z-index: 98;                 /* over the drop-bin dock (95), under menus and dialogs (100) */
+  display: flex;
+  min-width: 360px;
+  min-height: 240px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-lg);
+  background: var(--mv-bg);
+  backdrop-filter: blur(28px) saturate(150%);
+  box-shadow: var(--shadow-dialog);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  outline: none;
+}
+.mv-panel.is-opaque { background: var(--mv-bg-solid); backdrop-filter: none; }
+.mv-panel.is-dragging { user-select: none; }
+/* fullscreen here means "fill the app window": a CSS box, not the WM's
+   fullscreen — the pop-out window is what gives you a real one */
+.mv-panel.is-full {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border-width: 0;
+}
+
+/* resize edges — thin strips outside the padding, above the viewer content */
+.mv-edge { position: absolute; z-index: 3; --edge: 8px; }
+.mv-panel.is-full .mv-edge { display: none; }
+.mv-edge-n { top: 0; left: 0; right: 0; height: var(--edge); cursor: ns-resize; }
+.mv-edge-s { bottom: 0; left: 0; right: 0; height: var(--edge); cursor: ns-resize; }
+.mv-edge-w { top: 0; bottom: 0; left: 0; width: var(--edge); cursor: ew-resize; }
+.mv-edge-e { top: 0; bottom: 0; right: 0; width: var(--edge); cursor: ew-resize; }
+.mv-edge-nw, .mv-edge-ne, .mv-edge-sw, .mv-edge-se {
+  width: calc(var(--edge) * 1.75); height: calc(var(--edge) * 1.75); z-index: 4;
+}
+.mv-edge-nw { top: 0; left: 0; cursor: nwse-resize; }
+.mv-edge-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.mv-edge-ne { top: 0; right: 0; cursor: nesw-resize; }
+.mv-edge-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+
+/* ------------------------------------------------------------- the viewer */
+
+.mv-viewer {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mv-head {
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--divider);
+  cursor: move;
+  user-select: none;
+}
+.mv-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mv-count { flex: none; font-size: var(--fs-caption); color: var(--text-secondary); }
+.mv-head-btns { flex: none; display: flex; gap: 2px; }
+
+.mv-btn {
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.mv-btn:hover { background: var(--bg-hover); }
+.mv-btn:active { background: var(--bg-active); }
+.mv-btn:focus-visible { outline: 2px solid var(--focus-stroke); outline-offset: -2px; }
+.mv-close:hover { background: #c42b1c; color: #fff; }
+
+/* ------------------------------------------------------------- the stage */
+
+.mv-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--mv-stage);
+}
+.mv-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+/* documents want the whole box and their own scrolling */
+.mv-viewer[data-kind="text"] .mv-content,
+.mv-viewer[data-kind="pdf"] .mv-content { display: block; }
+.mv-viewer[data-kind="audio"] .mv-content { flex-direction: column; gap: 12px; }
+
+.mvr-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: none;
+  image-orientation: from-image;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.mvr-img.is-pannable { cursor: grab; }
+.mvr-img.is-panning { cursor: grabbing; }
+
+.mvr-video { max-width: 100%; max-height: 100%; background: #000; }
+/* the transport bar below is the audio control; the element itself is silent chrome */
+.mvr-audio { display: none; }
+.mvr-pdf { width: 100%; height: 100%; border: 0; }
+.mvr-text {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 12px 16px;
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  background: var(--bg-content);
+}
+.mvr-fallback { display: flex; align-items: center; justify-content: center; }
+.mvr-thumb { max-width: 60%; max-height: 60%; border-radius: var(--radius); }
+.mvr-icon { width: 96px; height: 96px; }
+.mvr-btn {
+  /* sits just above .mvr-note, which is pinned to the stage bottom */
+  position: absolute;
+  left: 50%;
+  bottom: 38px;
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--stroke-strong);
+  background: var(--bg-layer);
+  color: var(--text-primary);
+  font-size: var(--fs-caption);
+  cursor: default;
+}
+.mvr-btn:hover { background: var(--bg-hover-strong); }
+.mvr-btn:active { background: var(--bg-press); }
+
+.mvr-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  padding: 0 24px;
+  text-align: center;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.mvr-art { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.mvr-cover { width: 220px; height: 220px; object-fit: cover; border-radius: var(--radius-lg); box-shadow: var(--shadow-flyout); }
+.mvr-tags { text-align: center; }
+.mvr-tag-title { font-size: 16px; }
+.mvr-tag-sub { font-size: var(--fs-caption); color: var(--text-secondary); }
+
+.mv-error {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 80%;
+  text-align: center;
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+}
+
+/* prev / next — always reachable, but out of the way until the pointer is in */
+.mv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  background: var(--mv-nav-bg);
+  box-shadow: var(--shadow-flyout);
+  opacity: 0;
+  transition: opacity var(--dur-mid) var(--ease-fluent);
+}
+.mv-stage:hover .mv-nav, .mv-nav:focus-visible { opacity: 1; }
+.mv-prev { left: 10px; }
+.mv-next { right: 10px; }
+
+/* ------------------------------------------------------------- transport */
+
+.mv-bar {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-top: 1px solid var(--divider);
+}
+.mv-bar[hidden] { display: none; }
+.mv-time { font-size: var(--fs-caption); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+.mv-scrub {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  cursor: pointer;
+  touch-action: none;
+}
+/* the rail is drawn on ::before so the whole 18px strip stays clickable */
+.mv-scrub::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 7px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--mv-rail);
+}
+.mv-buf, .mv-played {
+  position: absolute;
+  left: 0;
+  top: 7px;
+  height: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.mv-buf { right: 0; }
+.mv-buf-seg { position: absolute; top: 0; height: 4px; border-radius: 2px; background: var(--mv-buf); }
+.mv-played { background: var(--accent-light); width: 0; }
+.mv-knob {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+.mv-vol { width: 84px; accent-color: var(--accent-light); }
+.mv-rate {
+  height: 24px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-caption);
+}
+.mv-rate option { color: var(--text-primary); background: var(--bg-flyout); }
+
+.mv-zoombar { justify-content: center; }
+.mv-zoomlabel {
+  min-width: 58px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.mv-zoomlabel:hover { background: var(--bg-hover); }
+.mv-dims { font-size: var(--fs-caption); color: var(--text-secondary); margin-left: 8px; }
+
+/* ------------------------------------------------------- pop-out window */
+
+.mv-popout-body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-window);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+.mv-window { height: 100vh; display: flex; outline: none; }
+/* no floating panel around it: the OS frame is the window chrome. NOTE the
+   class is .mv-window, not .mv-popout — that one is the pop-out BUTTON, and
+   sharing the name gave the button a 100vh height (measured, then renamed). */
+.mv-window .mv-head { cursor: default; }
+
+/* Blurred stand-in while the full image loads (render.ts placeholder()).
+   Fills the stage with object-fit:contain so it lands at the same position and
+   aspect the real image will, and sits UNDER it so the swap is a repaint with
+   no reflow. Not interactive — the real <img> owns pan/zoom. */
+.mvr-ph {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-orientation: from-image;
+  filter: blur(6px);
+  transform: scale(1.03); /* hide the blur bleeding in from the edges */
+  opacity: 0.75;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+.mvr-img { z-index: 1; }
+
+/* ------------------------------------------------------------------ triage
+   The rapid-triage deck (media/triage.ts). Absolutely positioned INSIDE the
+   stage so it sits on the bottom edge of the picture — never over the filename
+   in the header, which is the mistake the grid's star overlay made. Uses the
+   same float treatment as the panel itself so it reads as chrome floating over
+   the image rather than part of it, with the opaque fallback for software
+   rendering (:root.no-blur redefines --bg-float / --float-blur). */
+.mv-triage {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 4;
+  max-width: calc(100% - 20px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  border: 1px solid var(--stroke-strong);
+}
+.mv-triage[hidden] { display: none; }
+
+.mv-tri-stars, .mv-tri-bins, .mv-tri-right { display: flex; align-items: center; gap: 4px; }
+
+/* Only the bin chips scroll. With ten bins configured the deck is wider than
+   the panel, and letting the WHOLE deck scroll pushed Recycle and the undo
+   chip off the right edge — the two controls you least want to have to go
+   looking for. Stars and the right-hand group are pinned; the middle gives. */
+.mv-tri-stars, .mv-tri-right { flex: none; }
+.mv-tri-bins {
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mv-tri-bins::-webkit-scrollbar { display: none; }
+.mv-tri-bin { flex: none; }
+
+.mv-tri-star {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mv-tri-star svg { width: 16px; height: 16px; fill: currentColor; }
+.mv-tri-star:hover { background: var(--bg-subtle); color: var(--text-secondary); }
+.mv-tri-star.is-lit { color: #f7c948; }
+
+.mv-tri-clear, .mv-tri-bin, .mv-tri-del, .mv-tri-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mv-tri-clear:hover, .mv-tri-bin:hover, .mv-tri-del:hover, .mv-tri-undo:hover { background: var(--bg-hover); }
+.mv-tri-clear:disabled { opacity: 0.4; cursor: default; }
+.mv-tri-del svg, .mv-tri-undo svg { width: 14px; height: 14px; flex: none; }
+.mv-tri-del { color: var(--danger); }
+
+/* a long bin name must not push the recycle button off the deck */
+.mv-tri-binlabel { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
+/* nor a long filename in the undo label */
+.mv-tri-undo span { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+
+.mv-tri-bin kbd {
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  min-width: 14px;
+  padding: 0 3px;
+  text-align: center;
+  border-radius: 3px;
+  background: var(--bg-float-solid);
+  border: 1px solid var(--stroke);
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- filmstrip
+   Fixed height and fixed cell width — both are load-bearing. media/filmstrip.ts
+   computes the visible run arithmetically from the cell stride instead of
+   measuring every cell, which is what lets a four-thousand-photo folder build
+   its strip without a four-thousand-element layout pass. */
+.mv-strip {
+  flex: none;
+  height: 70px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--divider);
+  background: var(--bg-subtle);
+  scrollbar-width: thin;
+}
+.mv-strip[hidden] { display: none; }
+.mv-strip-track { display: flex; gap: 4px; padding: 6px; height: 100%; box-sizing: border-box; }
+
+.mv-strip-cell {
+  flex: none;
+  width: 84px;
+  height: 58px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-float-solid);
+  border: 2px solid transparent;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.mv-strip-cell:hover { border-color: var(--stroke-strong); }
+.mv-strip-cell.is-current { border-color: var(--accent); }
+.mv-strip-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* a cell whose thumbnail has not loaded yet must stay an empty box, not a
+     broken-image glyph — the strip is mostly unloaded cells while scrolling */
+  color: transparent;
+}
+
+/* "MPEG2 video needs converting." — information, not a failure, so it is
+   styled as a passing note rather than as the error box it sits beside. */
+.mv-note {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: calc(100% - 32px);
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog);
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+  pointer-events: none;
+}
+.mv-note[hidden] { display: none; }
+
+/* ------------------------------------------------- subtitle / audio picker */
+.mv-trackmenu {
+  position: absolute;
+  z-index: 6;
+  min-width: 200px;
+  max-width: 340px;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+}
+.mv-trackhead {
+  padding: 6px 8px 3px;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mv-trackitem {
+  display: block;
+  width: 100%;
+  padding: 5px 8px 5px 22px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  /* a long track title must not widen the menu past its max */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mv-trackitem:hover:not(:disabled) { background: var(--bg-hover); }
+.mv-trackitem.is-on::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 5px;
+  height: 9px;
+  margin-top: -6px;
+  border: solid var(--accent);
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(45deg);
+}
+/* greyed, but still readable — the tooltip explains why it cannot be picked */
+.mv-trackitem:disabled { color: var(--text-disabled); cursor: default; }
+
+/* Chromium renders cues into a shadow tree; this is the supported hook. */
+.mvr-video::cue {
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 88%;
+}
+
+/* ------------------------------------------------------------- contact sheet
+   Scene-select over the picture. Fills the stage rather than floating, because
+   picking a moment is a full-attention act — you are not watching while you do
+   it — and a small grid of twelve frames would be too small to recognise. */
+.mv-sheetgrid {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  padding: 34px 10px 10px;
+  overflow-y: auto;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  align-content: start;
+}
+.mv-sheetcell {
+  position: relative;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+}
+.mv-sheetcell:hover { border-color: var(--accent); }
+.mv-sheetcell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mv-sheettime {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.mv-sheetclose {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1;
+}
+.mv-sheetclose:hover { background: var(--bg-hover); }
+/* the button spins nothing, but it must not look inert while ffmpeg runs */
+.mv-sheet.is-busy { opacity: 0.5; pointer-events: none; }
+
+/* --------------------------------------------------- hover seek preview
+   A storyboard frame for the moment under the pointer, above the scrub bar.
+   Positioned by the viewer against the panel, and transparent to the pointer
+   so it can never interrupt the hover that produced it. */
+.mv-seekpop {
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: 168px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog);
+  pointer-events: none;
+}
+.mv-seekpop[hidden] { display: none; }
+.mv-seekimg {
+  display: block;
+  width: 100%;
+  height: 94px;
+  object-fit: cover;
+  background: #000;
+  /* no broken-image glyph while the first frame is still being made */
+  color: transparent;
+}
+.mv-seektime {
+  padding: 2px 0 3px;
+  text-align: center;
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* the A-B loop segment, painted inside the one scrub bar */
+.mv-loop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.mv-loop[hidden] { display: none; }
+/* only the start is set: a marker, not a span */
+.mv-loop.is-pending {
+  min-width: 2px;
+  background: var(--accent);
+  box-shadow: none;
+}
+/* pinned-on-top toggle in the pop-out window's header */
+.mv-pin.is-on { color: var(--accent); }
+
+/* inline rename in the viewer's title bar */
+.mv-rename {
+  width: 100%;
+  max-width: 420px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-float-solid);
+  color: var(--text-primary);
+  font: inherit;
+}

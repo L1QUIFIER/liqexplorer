@@ -35,6 +35,7 @@ import { CH } from '../../shared/ipc'
 import type { FileEntry, OpRequest, OpStatus } from '../../shared/types'
 import { mimeForName, iconsForMime } from '../fs/mime'
 import * as backend from './archive/backend'
+import './archive/members'   // registers archiveMembers + sweeps the member cache
 import { candidatesFor, MAX_SILENT_ATTEMPTS, MAX_SILENT_MS } from './archive/passwords'
 import { askPassword, cancelPasswordPrompt, type PromptCtx } from './archive/prompt'
 
@@ -399,30 +400,61 @@ export async function runExtract(ctx: ArchiveCtx): Promise<void> {
     }
 
     // --- extract into a private temp dir, then move into place ---
-    const tmp = await makeTempDir(ctx.dest)
+    //
+    // Everything from the temp dir to the final move is wrapped: a destination
+    // problem belonging to ONE archive (its "<stem>/" target is taken by a
+    // plain file, the temp dir cannot be created, the disk filled up) must fail
+    // that archive and leave the other nine in the selection alone — see the
+    // contract at the top of runExtract. Cancellation is the one thing that
+    // still propagates, because the engine's CancelledError ends the whole op.
     try {
-      const r = await backend.extract(archive, tmp, {
-        password,
-        onChild: ctx.setChild,
-        onPercent: p => ctx.setBytes(base + Math.round(plan.bytes * Math.min(100, p) / 100)),
-      })
-      ctx.checkCancel()
-      if (!r.ok) {
-        ctx.fail(archive, r.error ?? `Could not extract "${name}".`)
-      } else {
-        await unwrapSingleStream(ctx, tmp, listing)
-        const targetDir = await chooseTarget(ctx, archive, tmp, mode)
-        await fsp.mkdir(targetDir, { recursive: true })
-        const created = await ctx.moveInto(tmp, targetDir)
-        for (const c of created) ctx.recordCreated(c)
+      const tmp = await makeTempDir(ctx.dest)
+      try {
+        const r = await backend.extract(archive, tmp, {
+          password,
+          onChild: ctx.setChild,
+          onPercent: p => ctx.setBytes(base + Math.round(plan.bytes * Math.min(100, p) / 100)),
+        })
+        ctx.checkCancel()
+        if (!r.ok) {
+          ctx.fail(archive, r.error ?? `Could not extract "${name}".`)
+        } else {
+          await unwrapSingleStream(ctx, tmp, listing)
+          const targetDir = await chooseTarget(ctx, archive, tmp, mode)
+          await fsp.mkdir(targetDir, { recursive: true })
+          const created = await ctx.moveInto(tmp, targetDir)
+          for (const c of created) ctx.recordCreated(c)
+        }
+      } finally {
+        await rmrf(tmp)                     // cancel/failure never litters the destination
       }
-    } finally {
-      await rmrf(tmp)                       // cancel/failure never litters the destination
+    } catch (e) {
+      if (ctx.isCancelled()) throw e
+      ctx.fail(archive, destError(e, name))
     }
 
     base += plan.bytes
     ctx.setBytes(base)
     ctx.itemDone()
+  }
+}
+
+/** Destination-side failure for one archive, in the failure list's own voice. */
+function destError(e: unknown, name: string): string {
+  const err = e as NodeJS.ErrnoException
+  switch (err?.code) {
+    case 'EEXIST':
+    case 'ENOTDIR':
+      return `"${name}" could not be unpacked because something else already has that name.`
+    case 'ENOSPC':
+      return `There is not enough free space to unpack "${name}".`
+    case 'EACCES':
+    case 'EPERM':
+      return `"${name}" could not be unpacked because the destination folder cannot be written to.`
+    case 'ENOENT':
+      return `"${name}" could not be unpacked because the destination folder no longer exists.`
+    default:
+      return `Could not extract "${name}": ${err?.message ?? String(e)}`
   }
 }
 
@@ -465,7 +497,15 @@ async function chooseTarget(
 ): Promise<string> {
   if (mode === 'to') return ctx.dest
   const stem = backend.archiveStem(archive)
-  if (mode === 'named') return path.join(ctx.dest, stem)   // merges if it exists; conflicts ask per file
+  if (mode === 'named') {
+    const target = path.join(ctx.dest, stem)
+    // an existing FOLDER merges (per-file conflicts ask); an existing FILE of
+    // the same name would make mkdir throw EEXIST, so de-collide the way the
+    // 'auto' branch below does rather than failing the extraction
+    const st = await fsp.stat(target).catch(() => null)
+    if (st?.isDirectory() || !await exists(target)) return target
+    return path.join(ctx.dest, await ctx.uniqueName(ctx.dest, stem, true))
+  }
   const roots = await fsp.readdir(tmp).catch(() => [] as string[])
   if (roots.length <= 1) return ctx.dest                   // archive carries its own folder
   const free = await exists(path.join(ctx.dest, stem))

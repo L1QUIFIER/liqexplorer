@@ -41,6 +41,10 @@ const watches = new Map<number, WatchRec>()
 const hookedWCs = new WeakSet<WebContents>()
 
 export function watchDir(wc: WebContents, dir: string): number {
+  // Virtual locations (starred://, ...) have nothing to inotify and would throw
+  // in startInotify. 0 is the renderer's "no watch" sentinel, so it is already
+  // handled everywhere a watchId is released.
+  if (dir.includes('://')) return 0
   const id = nextWatch++
   if (!hookedWCs.has(wc)) {
     hookedWCs.add(wc)
@@ -105,7 +109,7 @@ function startInotify(rec: WatchRec): void {
   } catch (e) {
     const code = (e as NodeJS.ErrnoException)?.code
     if (code === 'EMFILE' || code === 'ENFILE' || code === 'ENOSPC') {
-      // inotify is exhausted machine-wide (this box caps user instances at 128
+      // inotify is exhausted machine-wide (many systems cap user instances around 128
       // and a desktop full of apps reaches it). Silently never refreshing is
       // the worst outcome, so degrade to the same mtime poll the network
       // mounts use instead of leaving the folder unwatched.

@@ -30,6 +30,9 @@ import type {
 import { broadcast } from '../windows'
 import * as trash from '../platform/trash'
 import * as undo from './undo'
+import * as history from '../state/history'
+import * as ratings from '../state/ratings'
+import { reindexResume } from '../state/resume'
 import { bindEngine, cancelPasswordPrompt, runCompress, runExtract, type ArchiveCtx } from './archive'
 
 const HW = 1024 * 1024                 // 1MB stream chunks: pause/cancel stay responsive
@@ -63,6 +66,8 @@ interface Op {
   /** originating window; conflicts go only here (null = internal replay, broadcast) */
   sender: WebContents | null
   record: boolean
+  /** undo/redo replay tag, for the activity log */
+  via?: 'undo' | 'redo'
   status: OpStatus
   bytesDone: number
   bytesTotal: number
@@ -96,6 +101,9 @@ interface Op {
 
 const TERMINAL = new Set<OpStatus>(['done', 'error', 'cancelled'])
 const RECORDABLE = new Set<OpKind>(['copy', 'move', 'rename', 'trash', 'mkdir', 'mkfile', 'symlink'])
+/** history covers more than undo does — a permanent delete is the single
+ *  most important thing to be able to look back at */
+const HISTORIC = new Set<OpKind>([...RECORDABLE, 'delete', 'emptyTrash', 'restoreTrash', 'compress', 'extract'])
 
 const opsById = new Map<number, Op>()
 const pending: Op[] = []
@@ -114,9 +122,15 @@ export async function startOp(wc: WebContents, req: OpRequest): Promise<number> 
 // imported to keep the two modules acyclic
 bindEngine(startOp)
 
-/** Run an op outside the recording path (undo/redo replay). Resolves when it finishes. */
-export function runInternal(req: OpRequest, pairs?: MovePair[]): Promise<OpResult> {
-  return enqueue(req, { record: false, pairs }).done
+/**
+ * Run an op outside the UNDO recording path (undo/redo replay). `via` tags it
+ * for the activity log: a replay is not a new user action, but it does move
+ * real files, so the log shows what it did and says which it was.
+ */
+export function runInternal(
+  req: OpRequest, pairs?: MovePair[], via?: 'undo' | 'redo',
+): Promise<OpResult> {
+  return enqueue(req, { record: false, pairs, via }).done
 }
 
 export function pauseOp(id: number): void {
@@ -169,7 +183,10 @@ export function getOps(): OpProgress[] {
 
 // ---------------- queue ----------------
 
-function enqueue(req: OpRequest, opts: { record: boolean; pairs?: MovePair[]; sender?: WebContents }): Op {
+function enqueue(
+  req: OpRequest,
+  opts: { record: boolean; pairs?: MovePair[]; sender?: WebContents; via?: 'undo' | 'redo' },
+): Op {
   let doneResolve!: (r: OpResult) => void
   const done = new Promise<OpResult>(res => { doneResolve = res })
   const op: Op = {
@@ -179,6 +196,7 @@ function enqueue(req: OpRequest, opts: { record: boolean; pairs?: MovePair[]; se
     pairs: opts.pairs,
     sender: opts.sender ?? null,
     record: opts.record,
+    via: opts.via,
     status: 'queued',
     bytesDone: 0, bytesTotal: 0, itemsDone: 0, itemsTotal: 0,
     currentFile: '',
@@ -245,7 +263,35 @@ function finishOp(op: Op, status: OpStatus): void {
   }
   op.currentFile = ''
   pushProgress(op)
+  // Ratings follow the file. The xattr copy already survives a same-device
+  // rename on its own, but a move ACROSS devices is a copy-and-delete that
+  // drops it, and undo/redo replays move files too — so the index is re-keyed
+  // here, where every kind of move lands, rather than in recordOutcome (which
+  // internal replays skip).
+  if (op.movedPairs.length) ratings.migrate(op.movedPairs)
+  if (op.movedPairs.length) reindexResume(op.movedPairs)
   if (op.record && status === 'done') recordOutcome(op)
+  // Activity history: written for EVERY user-started operation, including the
+  // ones undo deliberately does not record (permanent delete, empty trash),
+  // because those are exactly the ones someone needs to look back at. Internal
+  // undo/redo replays (record === false) are skipped so the log reads as what
+  // the user did, not what the machine did to satisfy them.
+  // op.sender marks a user-started operation; op.via marks an undo/redo replay.
+  // Both really happened to the user's files, so both are logged — anything
+  // else (an internal replay with neither) stays out of it.
+  if ((op.sender || op.via) && HISTORIC.has(op.kind)) {
+    history.record({
+      kind: op.kind,
+      count: op.itemsTotal || op.req.sources.length,
+      sources: op.req.sources.slice(0, 4),
+      // an undo replay carries explicit per-source pairs instead of a single
+      // dest, so read where the files actually landed from the first pair
+      dest: op.req.dest ?? (op.pairs?.[0] ? path.dirname(op.pairs[0].to) : undefined),
+      status: status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'error',
+      failures: op.failures.length || undefined,
+      via: op.via,
+    })
+  }
   op.doneResolve({ status, failureCount: op.failures.length })
   const reap = setTimeout(() => { opsById.delete(op.id) }, status === 'error' ? 60_000 : 5_000)
   reap.unref?.()

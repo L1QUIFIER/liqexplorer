@@ -9,6 +9,9 @@ function copyStatic() {
   mkdirSync('dist/renderer/styles', { recursive: true })
   cpSync('src/renderer/index.html', 'dist/renderer/index.html')
   cpSync('src/renderer/styles', 'dist/renderer/styles', { recursive: true })
+  // the popped-out media window is its own page (own CSP, no file manager)
+  mkdirSync('dist/renderer/media', { recursive: true })
+  cpSync('src/renderer/media/popout.html', 'dist/renderer/media/popout.html')
 }
 copyStatic()
 
@@ -39,6 +42,12 @@ const jobs = [
   {
     ...common,
     entryPoints: ['src/renderer/index.ts'],
+    platform: 'browser',
+    format: 'iife',
+  },
+  {
+    ...common,
+    entryPoints: ['src/renderer/media/popout.ts'],
     platform: 'browser',
     format: 'iife',
   },

@@ -1,0 +1,116 @@
+/* Dual pane (#panes) — two twin file views inside one tab, with a draggable
+   splitter between them. Loaded LAST so these rules win over the single-pane
+   boxes in base.css / home.css at equal specificity.
+
+   Pane 0 keeps the ids #viewhost / #homehost, so its surface (rounded top-left
+   corner, top + left hairline) still comes from base.css / home.css untouched.
+   Pane 1 repeats that surface here, the way #sidepane does on the other side. */
+
+#panes {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+#panes.pn-vert { flex-direction: column; }
+
+.pn-pane {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+/* the pane's two twins: only one of them is ever displayed */
+.pn-view,
+.pn-home {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-content);
+}
+
+/* pane 1's surface: mirrors #viewhost's box (top + left hairline, rounded
+   top-left) when side by side; stacked, it is only capped by a top hairline */
+.pn-pane[data-pane="1"] .pn-view,
+.pn-pane[data-pane="1"] .pn-home {
+  border-top: 1px solid var(--stroke);
+  border-left: 1px solid var(--stroke);
+  border-radius: var(--radius-lg) 0 0 0;
+}
+#panes.pn-vert .pn-pane[data-pane="1"] .pn-view,
+#panes.pn-vert .pn-pane[data-pane="1"] .pn-home {
+  border-left: none;
+  border-radius: 0;
+}
+
+/* ---------------- focused pane rail ----------------
+   A 2px accent line across the top of the pane that owns focus. It only exists
+   while the tab is split (a single pane needs no "which one is live?" hint) and
+   it is painted OVER the pane box, so it never reflows the view by a pixel. */
+.pn-pane::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+  transition: opacity var(--dur-fast) var(--ease-fluent);
+}
+#panes.pn-split .pn-pane.pn-active::after { opacity: 1; }
+
+/* the sleeping pane recedes: its selection keeps the geometry but loses the
+   accent, exactly like an unfocused list in Explorer */
+#panes.pn-split .pn-pane:not(.pn-active) .vh-item.selected {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--stroke-strong);
+}
+#panes.pn-split .pn-pane:not(.pn-active) .vh-item.focused {
+  outline-color: var(--stroke-strong);
+  box-shadow: none;
+}
+
+/* ---------------- splitter ----------------
+   Same 6px grab strip + accent hairline on hover as #navpane-splitter and
+   #sidepane-splitter, so all three resize handles feel identical. */
+#pane-splitter {
+  width: 6px;
+  flex: none;
+  cursor: col-resize;
+  position: relative;
+  z-index: 4;
+}
+#panes.pn-vert #pane-splitter {
+  width: auto;
+  height: 6px;
+  cursor: row-resize;
+}
+#pane-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-fluent);
+}
+#panes.pn-vert #pane-splitter::after { inset: 2px 0; }
+#pane-splitter:hover::after,
+#pane-splitter.dragging::after { background: var(--accent-light); }
+
+/* command bar toggle: lit while the tab is split, like a pressed toolbar button */
+.cb-icon.cb-dual.on {
+  background: var(--bg-active);
+  color: var(--accent);
+}
+
+/* Home in a pane is a focus target (Tab between panes lands here when the pane
+   is showing home://), but it must never draw a browser focus ring. */
+.pn-home:focus { outline: none; }

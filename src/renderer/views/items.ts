@@ -6,12 +6,29 @@
 import type { FileEntry, ViewMode } from '../../shared/types'
 import { formatDate, formatSize, typeLabelFor } from '../../shared/sort'
 import type { Group } from '../../shared/sort'
+import { archiveUri, isArchiveUri, parseArchiveUri } from '../../shared/archive'
+import { liq } from '../core/app'
+// self-mounting: importing livemedia installs the live-preview driver (its own
+// listeners + stylesheet), so nothing else in the app needs a line for it
+import { markLive } from './livemedia'
+import { markDuration } from './mediabadge'
+// self-mounting, same as livemedia above: importing starsHtml installs the
+// whole ratings feature (stylesheet, number keys, change fan-out)
+import { ratingBadgeHtml, starsHtml } from './ratings'
 
 export interface DetailCol {
-  key: string           // SortKey or the synthetic 'folderPath' (search mode)
+  key: string           // SortKey, or a synthetic key like 'folderPath'
   width: number
   label: string
   right?: boolean
+  /**
+   * Injected by the view host for a particular location — 'Folder path' in
+   * search results, 'Original location' / 'Date deleted' in the Recycle Bin —
+   * rather than chosen by the user. It is not in viewState.columns, so it must
+   * not be draggable, resizable or sortable: all three would try to write it
+   * back into a column list it does not belong to.
+   */
+  synthetic?: boolean
 }
 
 export interface RenderCtx {
@@ -32,6 +49,7 @@ export const COLUMN_LABELS: Record<string, string> = {
   type: 'Type',
   size: 'Size',
   ext: 'File extension',
+  rating: 'Rating',
   folderPath: 'Folder path',
   origPath: 'Original location',
   deletedAt: 'Date deleted',
@@ -75,6 +93,54 @@ export function thumbURL(e: FileEntry, mode: ViewMode): string {
   return `liqthumb://?path=${encodeURIComponent(e.path)}&size=${size}`
 }
 
+// ---- thumbnails for files INSIDE an archive -------------------------------
+//
+// A member has no path on disk, so it must be extracted before it can be
+// thumbnailed. Doing that per tile would spawn one 7z per image; instead every
+// request inside one animation-frame-ish window is collected and extracted in a
+// single run, which is what makes a gallery of a hundred images inside a zip
+// practical. Results are remembered for the session (the member cache in main
+// is keyed by archive mtime, so it self-invalidates).
+
+const memberPaths = new Map<string, string>()          // archive-uri -> local path
+const pendingByArchive = new Map<string, {
+  members: Set<string>
+  waiters: ((map: Record<string, string>) => void)[]
+  timer: number
+}>()
+
+/** local file for an archive member, extracting it (batched) if needed */
+export function archiveMemberPath(uri: string): Promise<string | null> {
+  const known = memberPaths.get(uri)
+  if (known) return Promise.resolve(known)
+  const p = parseArchiveUri(uri)
+  if (!p || !p.inner) return Promise.resolve(null)
+
+  let batch = pendingByArchive.get(p.archive)
+  if (!batch) {
+    batch = { members: new Set(), waiters: [], timer: 0 }
+    pendingByArchive.set(p.archive, batch)
+  }
+  batch.members.add(p.inner)
+
+  const done = new Promise<Record<string, string>>(resolve => { batch!.waiters.push(resolve) })
+  if (!batch.timer) {
+    batch.timer = window.setTimeout(() => {
+      const b = pendingByArchive.get(p.archive)!
+      pendingByArchive.delete(p.archive)
+      void liq.invoke('archiveMembers', { archive: p.archive, members: [...b.members] })
+        .then((map: Record<string, string>) => {
+          for (const [member, local] of Object.entries(map ?? {})) {
+            memberPaths.set(archiveUri(p.archive, member), local)
+          }
+          for (const w of b.waiters) w(map ?? {})
+        })
+        .catch(() => { for (const w of b.waiters) w({}) })
+    }, 60)
+  }
+  return done.then(map => map[p.inner] ?? null)
+}
+
 /** formatted cell value for a details column (also used for fit-to-content) */
 export function cellText(e: FileEntry, key: string, showExt: boolean): string {
   switch (key) {
@@ -88,6 +154,9 @@ export function cellText(e: FileEntry, key: string, showExt: boolean): string {
     case 'folderPath': return dirname(e.path)
     case 'origPath': return e.trashOrigPath ? dirname(e.trashOrigPath) : ''
     case 'deletedAt': return e.trashDeletedAt ? formatDate(e.trashDeletedAt) : ''
+    // the cell renders stars, not text; this is what fit-to-content measures,
+    // so it has to be as wide as five stars ever get
+    case 'rating': return '★★★★★'
     default: return ''
   }
 }
@@ -107,9 +176,19 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
         html += `<div class="vh-cell vh-namecell" style="width:${c.width}px">${CHECK}` +
           `<img class="vh-icon" width="16" height="16" alt="">` +
           `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span></div>`
+      } else if (c.key === 'rating') {
+        // the one column whose value is markup rather than text, so it cannot
+        // go through the escapeHtml path below
+        html += `<div class="vh-cell vh-seccell vh-ratecell" style="width:${c.width}px">` +
+          `${e.isDir ? '' : starsHtml(e.rating ?? 0)}</div>`
       } else {
+        // the text goes in a span, not straight into the cell: .vh-cell is a
+        // flex container for vertical centring, and text-overflow never
+        // ellipsizes a flex container's own text — a long Type value like
+        // "Tar archive (gzip-compressed)" was sliced with nothing to show for it
+        const txt = escapeHtml(cellText(e, c.key, ctx.showExt))
         html += `<div class="vh-cell vh-seccell${c.right ? ' vh-right' : ''}" style="width:${c.width}px">` +
-          `${escapeHtml(cellText(e, c.key, ctx.showExt))}</div>`
+          `<span class="vh-celltext" title="${txt}">${txt}</span></div>`
       }
     }
   } else if (mode === 'list' || mode === 'small') {
@@ -126,13 +205,19 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
       `<span>${e.isDir ? '' : escapeHtml(formatSize(e.size))}</span></span>`
   } else if (mode === 'tiles') {
     el.className = 'vh-item vh-tile'
-    html = `${CHECK}<span class="vh-thumbwrap" style="width:48px;height:48px"><img class="vh-icon" alt=""></span>` +
+    html = `${CHECK}<span class="vh-thumbwrap" style="width:48px;height:48px"><img class="vh-icon" alt="">` +
+      `${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}</span>` +
       `<span class="vh-tile-lines"><span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>` +
       `<span class="vh-sub">${escapeHtml(typeLabelFor(e))}</span>` +
       `<span class="vh-sub">${e.isDir ? '' : escapeHtml(formatSize(e.size))}</span></span>`
   } else {
     el.className = `vh-item vh-grid vh-${mode}`
-    html = `${CHECK}<span class="vh-thumbwrap" style="width:${ctx.icon}px;height:${ctx.icon}px"><img class="vh-icon" alt=""></span>` +
+    // The badge lives INSIDE .vh-thumbwrap, so it is positioned against the
+    // picture rather than the tile. That is what makes it impossible for it to
+    // cover the filename — including when selecting a tile expands the label to
+    // eight lines, which is where the old overlay was at its worst.
+    html = `${CHECK}<span class="vh-thumbwrap" style="width:${ctx.icon}px;height:${ctx.icon}px">` +
+      `<img class="vh-icon" alt="">${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}</span>` +
       `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>`
   }
   el.innerHTML = html
@@ -147,7 +232,29 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
         img.src = fallback
       }
       img.classList.add('vh-thumbimg')
-      img.src = thumbURL(e, mode)
+      // Every thumbnail carries its path so anything that mutates this <img>
+      // later can tell whether the element was recycled onto a different file
+      // first — the archive swap below, and the live previews in livemedia.ts.
+      img.dataset.for = e.path
+      markLive(img, e)
+      // the badge hangs on the WRAPPER, not the <img>: it is positioned against
+      // the picture, which is what keeps it off the filename (same reason as
+      // the rating badge)
+      const wrap = img.parentElement
+      if (wrap?.classList.contains('vh-thumbwrap')) markDuration(wrap, e, ctx.icon)
+      if (isArchiveUri(e.path)) {
+        // show the type icon immediately, swap in the real thumbnail when the
+        // member has been extracted (and only if this element wasn't recycled)
+        img.src = fallback
+        const forPath = e.path
+        void archiveMemberPath(forPath).then(local => {
+          if (!local || !img.isConnected || img.dataset.for !== forPath) return
+          img.src = `liqthumb://?path=${encodeURIComponent(local)}&size=${
+            mode === 'extra-large' || mode === 'large' ? 'large' : 'normal'}`
+        })
+      } else {
+        img.src = thumbURL(e, mode)
+      }
     } else {
       img.onerror = () => { img.style.visibility = 'hidden' }
       img.src = fallback

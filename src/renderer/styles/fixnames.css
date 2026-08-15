@@ -1,0 +1,166 @@
+/* "Fix problem names" dialog. Builds on dialogs.css (.dlg / .dlg-title /
+   .dlg-body / .dlg-buttons / .btn are shared); everything here is scoped to
+   .dlg-fixnames so no other dialog can be affected. */
+
+.dlg-fixnames .fx-body {
+  padding: 12px 16px 12px;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dlg-fixnames .fx-status {
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+  line-height: 1.45;
+  padding: 8px 2px;
+}
+.dlg-fixnames .fx-status.err { color: var(--danger); }
+
+/* ------------------------------------------------------------ header strip */
+
+.dlg-fixnames .fx-head {
+  display: grid;
+  grid-template-columns: 16px 1fr 260px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid var(--divider);
+  flex: none;
+}
+
+.dlg-fixnames .fx-count {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dlg-fixnames .fx-head-label {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- the list */
+
+.dlg-fixnames .fx-list {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+  margin: 0 -4px;
+  padding: 2px 4px;
+}
+
+.dlg-fixnames .fx-row {
+  display: grid;
+  grid-template-columns: 16px 1fr 260px;
+  grid-template-rows: auto auto;
+  align-items: start;
+  column-gap: 10px;
+  padding: 8px 4px;
+  border-radius: var(--radius);
+  border-top: 1px solid var(--divider);
+}
+.dlg-fixnames .fx-row:first-child { border-top: none; }
+.dlg-fixnames .fx-row:hover { background: var(--bg-hover); }
+
+.dlg-fixnames .fx-check {
+  accent-color: var(--accent-light);
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  cursor: default;
+}
+
+.dlg-fixnames .fx-meta { min-width: 0; }
+
+.dlg-fixnames .fx-name {
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;      /* keeps leading/trailing spaces visible */
+}
+.dlg-fixnames .fx-where {
+  font-family: var(--font-ui);
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+  white-space: normal;
+}
+
+.dlg-fixnames .fx-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+.dlg-fixnames .fx-tag {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--dlg-warn-bg);
+  color: var(--dlg-warn);
+  border: 1px solid var(--stroke-strong);
+  white-space: nowrap;
+}
+
+.dlg-fixnames .fx-reason {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.dlg-fixnames .fx-input {
+  grid-column: 3;
+  grid-row: 1;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+}
+.dlg-fixnames .fx-input:hover:not(:disabled) { border-color: var(--accent); }
+.dlg-fixnames .fx-input:focus { border-color: var(--accent); outline: none; }
+
+.dlg-fixnames .fx-note {
+  grid-column: 3;
+  grid-row: 2;
+  font-size: var(--fs-caption);
+  color: var(--danger);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  padding-top: 3px;
+}
+.dlg-fixnames .fx-note:empty { display: none; }
+
+/* row states */
+.dlg-fixnames .fx-row.off { opacity: 0.5; }
+.dlg-fixnames .fx-row.bad .fx-input,
+.dlg-fixnames .fx-row.err .fx-input { border-color: var(--danger); }
+.dlg-fixnames .fx-row.done {
+  opacity: 0.55;
+  background: rgba(38, 169, 20, 0.10);   /* --progress-green, faint in both themes */
+}
+.dlg-fixnames .fx-row.done .fx-note { color: var(--text-secondary); }
+
+/* ---------------------------------------------------------------- footnotes */
+
+.dlg-fixnames .fx-notes {
+  flex: none;
+  border-top: 1px solid var(--divider);
+  padding-top: 8px;
+}
+.dlg-fixnames .fx-notes:empty { display: none; border-top: none; padding-top: 0; }
+
+.dlg-fixnames .fx-note-line {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dlg-fixnames .fx-note-line.err { color: var(--danger); }

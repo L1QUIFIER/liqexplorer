@@ -47,6 +47,21 @@
   --accent-selection: #0078d4;
   --shadow-flyout: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0,0,0,.12);
   --shadow-dialog: 0 32px 64px rgba(0, 0, 0, 0.19), 0 2px 21px rgba(0, 0, 0, 0.15);
+
+  /* ---- free-floating surfaces ----------------------------------------
+     Things that hover over the file list with no scrim behind them: the drop
+     bins, the ops card, the peek popover. --bg-flyout (#f9f9f9) on
+     --bg-content (#ffffff) is a 2% difference, and over a grid of light
+     thumbnails both that fill and a 16%-black hairline disappear.
+
+     The fix the media viewer already proved: alpha + blur so the surface is
+     visibly IN FRONT of something, the heavier dialog shadow to lift it off
+     the page, and — the piece the viewer lacks — an outer light ring, so the
+     edge reads against a dark thumbnail as well as a white one. */
+  --bg-float: rgba(249, 249, 249, 0.85);
+  --bg-float-solid: #f6f6f6;
+  --float-blur: blur(28px) saturate(150%);
+  --ring-float: 0 0 0 1px rgba(255, 255, 255, 0.55);
   --scrollbar-thumb: rgba(0, 0, 0, 0.35);
   --tab-active-bg: var(--bg-layer);
   --tab-inactive-bg: transparent;
@@ -102,6 +117,9 @@
   --accent-light: #60cdff;
   --accent-selection: #0078d4;
   --shadow-flyout: 0 8px 16px rgba(0, 0, 0, 0.26), 0 0 2px rgba(0,0,0,.22);
+  --bg-float: rgba(32, 32, 32, 0.86);
+  --bg-float-solid: #202020;
+  --ring-float: 0 0 0 1px rgba(255, 255, 255, 0.09);
   --scrollbar-thumb: rgba(255, 255, 255, 0.35);
   --progress-green: #6ccb5f;
   --danger: #ff99a4;
@@ -125,4 +143,12 @@
   --sb-arrow-down: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.2 3.8 5 6.6 7.8 3.8' fill='none' stroke='%23cfcfcf' stroke-width='1.15' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --sb-arrow-left: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M6.2 2.2 3.4 5 6.2 7.8' fill='none' stroke='%23cfcfcf' stroke-width='1.15' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --sb-arrow-right: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M3.8 2.2 6.6 5 3.8 7.8' fill='none' stroke='%23cfcfcf' stroke-width='1.15' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* backdrop-filter is the expensive part on a machine with no GPU acceleration.
+   One switch drops it everywhere, leaving the solid fill — which is why every
+   floating surface reads --bg-float rather than hard-coding the alpha. */
+:root.no-blur {
+  --bg-float: var(--bg-float-solid);
+  --float-blur: none;
 }

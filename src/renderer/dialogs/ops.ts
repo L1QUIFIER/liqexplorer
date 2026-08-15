@@ -220,8 +220,11 @@ function updateCard(c: Card, p: OpProgress): void {
   c.title.textContent = headerText(p)
   c.title.title = c.title.textContent
 
+  // 'password' counts as running: the prompt only reaches the window that
+  // started the op, while progress is broadcast to all of them — leaving it out
+  // froze the card at 0% with no Cancel in every OTHER window.
   const running = p.status === 'queued' || p.status === 'enumerating' || p.status === 'running'
-    || p.status === 'paused' || p.status === 'conflict'
+    || p.status === 'paused' || p.status === 'conflict' || p.status === 'password'
   const indeterminate = (p.status === 'enumerating' || p.bytesTotal <= 0) && p.status !== 'done'
   const pct = p.bytesTotal > 0
     ? Math.min(100, Math.floor((p.bytesDone / p.bytesTotal) * 100))
@@ -237,13 +240,15 @@ function updateCard(c: Card, p: OpProgress): void {
   else if (p.status === 'queued') c.percent.textContent = 'Waiting…'
   else if (p.status === 'paused') c.percent.textContent = `Paused — ${pct}% complete`
   else if (p.status === 'conflict') c.percent.textContent = `${pct}% complete — action needed`
+  else if (p.status === 'password') c.percent.textContent = `${pct}% complete — password needed`
   else if (p.status === 'cancelled') c.percent.textContent = 'Cancelled'
   else if (p.status === 'error') c.percent.textContent = 'Error'
   else if (p.status === 'done') c.percent.textContent = p.failures?.length ? 'Done — with errors' : '100% complete'
   else c.percent.textContent = `${pct}% complete`
 
   // controls
-  c.pauseBtn.hidden = !running || p.status === 'conflict'
+  // pausing an op that is blocked on an answer is meaningless; cancelling is not
+  c.pauseBtn.hidden = !running || p.status === 'conflict' || p.status === 'password'
   c.cancelBtn.hidden = !running
   c.pauseBtn.innerHTML = p.status === 'paused' ? SVG_PLAY : SVG_PAUSE
   c.pauseBtn.setAttribute('aria-label', p.status === 'paused' ? 'Resume' : 'Pause')

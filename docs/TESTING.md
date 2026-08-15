@@ -16,12 +16,47 @@ DISPLAY=:99 setsid nohup openbox >/dev/null 2>&1 </dev/null &
 
 cd /path/to/LiqExplorer
 bash bin/build.sh
-DISPLAY=:99 setsid nohup dbus-run-session -- env LIQEXPLORER_TEST=1 bash bin/run.sh \
-  --remote-debugging-port=9223 --remote-allow-origins='*' >/tmp/liqexp-test.log 2>&1 </dev/null &
+bash bin/test-restart.sh 9223          # <- use this, not a hand-rolled launch
 ```
 
-`LIQEXPLORER_TEST=1` uses a scratch profile (`~/.cache/liqexplorer-test/profile`), so a test
-run never mutates real settings. `dbus-run-session` keeps portal dialogs (file pickers) off
+**Use `bin/test-restart.sh`.** Launching by hand has bitten this project twice in one
+session, both times leaving a *stale* app that still answers CDP — so tests passed against
+code that was never built:
+
+1. **The obvious pid is the wrapper.** `dbus-run-session` / `run.sh` sit in front of the real
+   electron main process. Killing the wrapper leaves the app running.
+2. **The single-instance lock is per user-data-dir.** With the old instance still alive, your
+   launch exits immediately and silently while the old one keeps the debugging port. You then
+   drive the old build and conclude your change did nothing (or, worse, that it works).
+
+`test-restart.sh` kills by user-data-dir, waits for the process to actually go, refuses to
+launch while one is alive, and passes `--remote-allow-origins='*'`.
+
+**When several people (or agents) test at once, give each one its own profile.** Otherwise
+they fight over that same lock, and they also overwrite each other's `settings.json` and
+`session.json`:
+
+```bash
+export LIQEXPLORER_TEST_DIR=/tmp/claude-1000/my-test
+bash bin/test-restart.sh 9401
+```
+
+`LIQEXPLORER_TEST_DIR` moves both the Electron profile and `STATE_DIR`. Note the second half:
+a restart-persistence test must use the **same** dir, or it will look like the data was lost.
+
+**Always confirm you are driving your own build**, whatever launch route you took:
+
+```bash
+ps -eo pid,lstart,args | grep -F -- "--user-data-dir=$LIQEXPLORER_TEST_DIR/profile" | grep -v -- '--type='
+stat -c '%y' dist/main/index.js
+```
+
+If the process is older than the bundle, you are testing stale code.
+
+`LIQEXPLORER_TEST=1` uses a scratch profile (`~/.cache/liqexplorer-test/profile`, or
+`$LIQEXPLORER_TEST_DIR/profile`), so a test run never mutates real settings. This matters more
+than it sounds: a test instance once wrote the user's real GTK bookmarks file and destroyed
+three entries. `dbus-run-session` keeps portal dialogs (file pickers) off
 `:0`. `--remote-allow-origins` is required or the CDP websocket 403s.
 
 A test instance and a normal user instance coexist: Electron's single-instance lock is keyed
@@ -87,6 +122,25 @@ Navigation and chrome
 - [ ] Tabs: Ctrl+T, middle-click close, right-click menu, Ctrl+Tab
 - [ ] Sort by / Group by offer every key; Group by Size uses Windows buckets
 - [ ] Ctrl+Shift+1..8 switch view modes without a blank viewport
+
+Peek popover (views/peek.ts)
+
+- [ ] Resting the pointer on a folder opens a grid of its contents after the View > Peek delay
+- [ ] Space peeks the focused item instantly and does NOT also add it to the selection
+      (Ctrl+Space still toggles selection)
+- [ ] Files peek per type: image large, text first 100 lines, PDF page 1, video with
+      working transport, archive member list, folder-in-a-zip as a grid
+- [ ] Esc, a click elsewhere, and leaving both the item and the popover all dismiss it;
+      crossing the gap into the popover does not
+- [ ] Arrows move inside a folder peek, Enter/double-click opens for real
+- [ ] A folder with 20 000 entries paints in well under a second and asks for only the
+      thumbnails on screen
+
+**Timer-driven UI needs a visible window.** With no WM (or another test instance mapped on
+top) the page goes `document.hidden` and Chromium throttles `setTimeout` — measured
+`setTimeout(1400)` taking 2337 ms, and longer as the page stays hidden, which makes any
+hover-dwell test fail for reasons that have nothing to do with the code. Run openbox on `:99`
+and check `document.hidden === false` before trusting a dwell measurement.
 
 Health
 

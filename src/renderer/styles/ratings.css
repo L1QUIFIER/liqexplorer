@@ -1,0 +1,107 @@
+/* Star ratings. Injected by views/ratings.ts, so index.html needs no <link>. */
+
+:root {
+  --star-on: #f0a30a;          /* Fluent "Gold" — reads as a rating, not as an error */
+  --star-off: rgba(27, 27, 27, 0.32);
+}
+[data-theme="dark"] {
+  --star-off: rgba(255, 255, 255, 0.34);
+}
+
+.vh-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  vertical-align: middle;
+  line-height: 0;
+}
+
+.vh-star {
+  display: inline-flex;
+  padding: 1px;
+  cursor: pointer;
+  color: var(--star-off);
+}
+.vh-star svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.vh-star.on { color: var(--star-on); }
+.vh-star.on svg { fill: currentColor; }
+
+/* Hovering the row previews the rating the click would set: every star up to
+   the pointer lights up, which is the only affordance that makes a 5-target
+   control legible at 12px. */
+.vh-stars:hover .vh-star { color: var(--star-on); }
+.vh-stars:hover .vh-star svg { fill: currentColor; }
+.vh-stars:hover .vh-star:hover ~ .vh-star { color: var(--star-off); }
+.vh-stars:hover .vh-star:hover ~ .vh-star svg { fill: none; }
+
+/* ---- tiles / icon grids: a corner badge on the THUMBNAIL ----
+   This replaced a five-star overlay strip. That strip was 80px wide and a
+   medium tile is exactly 80px, so it covered the filename; and because it was
+   pinned to the tile's bottom edge, selecting a tile (which expands the label
+   to eight lines) stamped it across the name.
+
+   Anchoring to .vh-thumbwrap instead of the tile makes that impossible in every
+   state. Only rated files get one — an unrated tile emits no element at all. */
+.vh-ratebadge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 4px 1px 3px;
+  border-radius: 8px;
+  /* its own scrim: the badge sits on a photo of unknown colour */
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;   /* rating happens in the inspector, not here */
+  z-index: 2;
+}
+.vh-ratebadge svg { width: 9px; height: 9px; fill: #f7c948; flex: none; }
+
+.vh-ratecell .vh-stars { pointer-events: auto; }
+
+/* ---- the active-filter strip ----
+   .vh-scroll is `position:absolute; inset:0`, so the bar overlays the top edge
+   and pushes the scroller down by the matching amount rather than trying to be
+   a flex sibling of something that is not in flow. */
+.vh-ratebar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 26px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  font: var(--fs-caption) / 1 var(--font-ui);
+  color: var(--text-secondary);
+  background: var(--bg-layer);
+  border-bottom: 1px solid var(--divider);
+}
+.vh-root.vh-has-ratebar .vh-scroll { top: 26px; }
+.vh-ratebar-txt { display: inline-flex; align-items: center; gap: 6px; }
+.vh-ratebar-txt .vh-star { cursor: default; }
+.vh-ratebar-clear {
+  font: var(--fs-caption) / 1 var(--font-ui);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.vh-ratebar-clear:hover { background: var(--bg-hover); }

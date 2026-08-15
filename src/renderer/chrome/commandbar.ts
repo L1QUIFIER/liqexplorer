@@ -6,6 +6,7 @@ import type { ViewMode } from '../../shared/types'
 import { sortKeysFor } from '../../shared/sort'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
+import { ratingFilterSubmenu } from '../views/ratings'
 
 const S = (d: string) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`
 const SVG_NEW = S('<path d="M8 2.5v11M2.5 8h11"/>')
@@ -21,6 +22,8 @@ const SVG_VIEW = S('<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y
 const SVG_MORE = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="13" cy="8" r="1.3"/></svg>'
 const SVG_PANE = S('<rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M9.5 3v10"/>')
 const SVG_RESTORE = S('<path d="M8 12.5V5M5 7.5 8 4.5l3 3M3 14h10"/>')
+// dual pane: two equal boxes, distinct from the preview pane's one-plus-strip
+const SVG_DUAL = S('<rect x="1.5" y="3" width="5.5" height="10" rx="1.5"/><rect x="9" y="3" width="5.5" height="10" rx="1.5"/>')
 
 // sort/group keys come from shared/sort.ts (sortKeysFor) — same list the
 // right-click menus and the column chooser use
@@ -60,6 +63,7 @@ export function mountCommandBar(root: HTMLElement): void {
     <div class="cb-sep"></div>
     <button class="cb-icon cb-more" title="See more" aria-label="See more">${SVG_MORE}</button>
     <div class="cb-spacer"></div>
+    <button class="cb-icon cb-dual" title="Dual pane (F3)" aria-label="Dual pane" aria-pressed="false">${SVG_DUAL}</button>
     <button class="cb-icon cb-preview" disabled title="Preview pane (coming soon)" aria-label="Preview pane">${SVG_PANE}</button>`
 
   const q = <T extends HTMLElement>(sel: string) => root.querySelector(sel) as T
@@ -69,6 +73,7 @@ export function mountCommandBar(root: HTMLElement): void {
   const sortBtn = q<HTMLButtonElement>('.cb-sort')
   const viewBtn = q<HTMLButtonElement>('.cb-view')
   const moreBtn = q<HTMLButtonElement>('.cb-more')
+  const dualBtn = q<HTMLButtonElement>('.cb-dual')
   const cmdBtn = (cmd: string) => root.querySelector(`[data-cmd="${cmd}"]`) as HTMLButtonElement
   const emptyTrashBtn = q<HTMLButtonElement>('.cb-empty-trash')
   const restoreAllBtn = q<HTMLButtonElement>('.cb-restore-all')
@@ -80,6 +85,7 @@ export function mountCommandBar(root: HTMLElement): void {
   cmdBtn('paste').addEventListener('click', () => { void actions.paste() })
   cmdBtn('rename').addEventListener('click', () => actions.rename())
   cmdBtn('delete').addEventListener('click', () => { void actions.delete() })
+  dualBtn.addEventListener('click', () => app.emit('toggle-dual-pane'))
 
   // ---- trash commands ----
   emptyTrashBtn.addEventListener('click', () => {
@@ -106,11 +112,21 @@ export function mountCommandBar(root: HTMLElement): void {
     void actions.newFile(undefined, template).then(p => { if (p) app.emit('start-rename', p) })
   }
   newBtn.addEventListener('click', async () => {
-    let templates: string[] = []
+    // keep the whole TemplateInfo: newFile() only copies the template's bytes
+    // when it gets an ABSOLUTE path — handing it the bare name writes a
+    // zero-byte file with the right name instead (the right-click New menu
+    // passes t.path, which is why only this one produced empty documents)
+    let templates: { name: string; path: string; icons?: string[] }[] = []
     try {
       const r = await liq.invoke('templatesList')
       if (Array.isArray(r)) {
-        templates = r.map((x: unknown) => typeof x === 'string' ? x : (x as { name?: string })?.name ?? '').filter(Boolean)
+        templates = (r as { name?: unknown; path?: unknown; icons?: unknown }[])
+          .filter(x => typeof x?.name === 'string' && typeof x?.path === 'string')
+          .map(x => ({
+            name: x.name as string,
+            path: x.path as string,
+            icons: Array.isArray(x.icons) ? x.icons as string[] : undefined,
+          }))
       }
     } catch { /* helper not wired yet */ }
     const items: MenuItem[] = [
@@ -120,9 +136,10 @@ export function mountCommandBar(root: HTMLElement): void {
       },
       { separator: true },
       { label: 'Text Document', icon: 'text-x-generic,text-plain', onClick: () => newFromFile() },
-      ...templates.map((name): MenuItem => ({
-        label: stripExt(name), icon: 'text-x-generic',
-        onClick: () => newFromFile(name),
+      ...templates.map((t): MenuItem => ({
+        label: stripExt(t.name),
+        icon: t.icons?.length ? t.icons.join(',') : 'text-x-generic',
+        onClick: () => newFromFile(t.path),
       })),
     ]
     newBtn.classList.add('open')   // keep the button lit while its flyout is up
@@ -156,6 +173,7 @@ export function mountCommandBar(root: HTMLElement): void {
           { label: 'Descending', radio: true, checked: vs.groupDir === 'desc', disabled: vs.groupKey === 'none', onClick: () => t.setViewState({ groupDir: 'desc' }) },
         ],
       },
+      { label: 'Filter by rating', submenu: ratingFilterSubmenu(t) },
     ]
     sortBtn.classList.add('open')   // keep the button lit while its flyout is up
     showMenu(items, { x: 0, y: 0, anchorEl: sortBtn, minWidth: 200,
@@ -175,6 +193,42 @@ export function mountCommandBar(root: HTMLElement): void {
       })),
       { separator: true },
       { label: 'Compact view', checked: s.compactView, onClick: () => { void app.setSettings({ compactView: !s.compactView }) } },
+      {
+        // the full set of knobs lives in Options > View; this is the one people
+        // actually reach for (turn it off when a folder is being scrolled hard)
+        label: 'Live previews',
+        submenu: ([
+          ['off', 'Never'],
+          ['hover', 'When I point at one'],
+          ['always', 'All of them, while visible'],
+        ] as const).map(([v, lb]): MenuItem => ({
+          label: lb, radio: true, checked: (s.liveMedia ?? 'hover') === v,
+          onClick: () => { void app.setSettings({ liveMedia: v }) },
+        })),
+      },
+      { separator: true },
+      // --- dual pane (views/panes.ts owns the panes; this only emits) ---
+      {
+        label: 'Dual pane', shortcut: 'F3', checked: app.isSplit,
+        onClick: () => app.emit('toggle-dual-pane'),
+      },
+      {
+        label: 'Pane layout',
+        disabled: !app.isSplit,
+        submenu: [
+          {
+            label: 'Side by side', radio: true, checked: app.activePrimary?.splitDir !== 'v',
+            onClick: () => app.emit('set-pane-layout', 'h'),
+          },
+          {
+            label: 'Top and bottom', radio: true, checked: app.activePrimary?.splitDir === 'v',
+            onClick: () => app.emit('set-pane-layout', 'v'),
+          },
+          { separator: true },
+          { label: 'Swap panes', shortcut: 'Ctrl+U', onClick: () => app.emit('swap-panes') },
+        ],
+      },
+      { separator: true },
       {
         label: 'Show',
         submenu: [
@@ -203,11 +257,14 @@ export function mountCommandBar(root: HTMLElement): void {
       { label: 'Select none', onClick: () => actions.selectNone() },
       { label: 'Invert selection', onClick: () => actions.invertSelection() },
       { separator: true },
-      { label: 'Compress to ZIP file', disabled: !hasSel, onClick: () => { void actions.compress() } },
+      // same reason as the icon buttons below: no real destination folder
+      { label: 'Compress to ZIP file', disabled: !hasSel || t.isVirtual, onClick: () => { void actions.compress() } },
       { label: 'Copy path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath() } },
       { separator: true },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties() } },
       { separator: true },
+      { label: 'Find duplicate files…', disabled: t.isVirtual, onClick: () => app.emit('show-duplicates', { root: t.path }) },
+      { label: 'Activity history', onClick: () => app.emit('show-history') },
       { label: 'Options', onClick: () => app.emit('show-options') },
     ]
     moreBtn.classList.add('open')   // keep the button lit while its flyout is up
@@ -224,8 +281,9 @@ export function mountCommandBar(root: HTMLElement): void {
     trashCluster.hidden = !isTrash
     const hasSel = t.selection.size > 0
     // rows on computer:// are live drive mountpoints — cut/rename/delete them
-    // would move/trash whole drives, so grey all edits like Explorer does
-    const noEdit = isTrash || t.path === 'computer://'
+    // would move/trash whole drives, so grey all edits like Explorer does;
+    // archive:// rows are members inside a zip, which the engine cannot touch
+    const noEdit = isTrash || t.isVirtual
     cmdBtn('cut').disabled = !hasSel || noEdit
     cmdBtn('copy').disabled = !hasSel || t.path === 'computer://'
     cmdBtn('paste').disabled = !(app.clipboard && app.clipboard.paths.length) || t.isVirtual
@@ -235,9 +293,13 @@ export function mountCommandBar(root: HTMLElement): void {
     emptyTrashBtn.disabled = t.rows.length === 0
     restoreAllBtn.disabled = t.rows.length === 0
     restoreSelBtn.disabled = !hasSel
+    dualBtn.classList.toggle('on', app.isSplit)
+    dualBtn.setAttribute('aria-pressed', String(app.isSplit))
+    dualBtn.title = app.isSplit ? 'Close dual pane (F3)' : 'Dual pane (F3)'
   }
 
   app.on('tabs-changed', update)
+  app.on('panes-changed', update)
   app.on('tab-navigated', (t: Tab) => { if (t === app.activeTab) update() })
   app.on('tab-listing', (t: Tab) => { if (t === app.activeTab) update() })
   app.on('tab-selection', (t: Tab) => { if (t === app.activeTab) update() })

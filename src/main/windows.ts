@@ -15,7 +15,10 @@ export function broadcast(channel: string, payload: unknown): void {
   for (const w of windows) if (!w.isDestroyed()) w.webContents.send(channel, payload)
 }
 
-export function createWindow(openPath?: string): BrowserWindow {
+export interface OpenRequest { open?: string; select?: string; properties?: boolean }
+
+export function createWindow(request?: string | OpenRequest): BrowserWindow {
+  const req: OpenRequest = typeof request === 'string' ? { open: request } : (request ?? {})
   const dark = nativeTheme.shouldUseDarkColors
   const win = new BrowserWindow({
     width: 1180,
@@ -57,7 +60,13 @@ export function createWindow(openPath?: string): BrowserWindow {
   win.on('unmaximize', send)
 
   win.loadFile(path.join(__dirname, '../renderer/index.html'), {
-    query: openPath ? { open: openPath } : {},
+    query: {
+      ...(req.open ? { open: req.open } : {}),
+      // the item to highlight once that folder has listed, and whether to go
+      // straight to its properties (FileManager1's ShowItemProperties)
+      ...(req.select ? { select: req.select } : {}),
+      ...(req.properties ? { properties: '1' } : {}),
+    },
   })
   return win
 }

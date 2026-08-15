@@ -8,12 +8,20 @@
 // Destructive verbs route through app.emit('show-confirm', ...) (dialogs.ts).
 
 import type { AppCandidate, FileEntry, Place, ViewMode } from '../../shared/types'
-import { sortKeysFor } from '../../shared/sort'
+import { sortKeysFor, formatSize } from '../../shared/sort'
 import { isArchiveName, archiveStem } from '../../shared/archive'
 import { app, liq, Tab } from '../core/app'
 import { actions } from '../core/actions'
+import { askArchivePassword } from '../dialogs/password'
+import { extractWizard } from '../dialogs/extract'
+import type { NemoAction } from '../../shared/nemo'
+// side-effect too: importing the floating media viewer is what mounts it
+import { openInMediaViewer } from '../media/overlay'
+import { isViewable } from '../media/render'
 import { showMenu } from './menu'
+import { transferWithConfirm } from '../core/confirmmove'
 import type { MenuAction, MenuItem } from './menu-types'
+import { rateSubmenu, ratingFilterSubmenu } from '../views/ratings'
 
 // ---------- payloads ----------
 
@@ -48,9 +56,143 @@ const I = {
 
 /** "Extract All..." — Explorer asks where to put it; default is <archive>/ */
 async function extractAll(tab: Tab, entry: FileEntry): Promise<void> {
-  const suggested = `${tab.path}/${archiveStem(entry.name)}`
-  const dest = await liq.invoke('pickFolder', suggested) as string | null
-  if (dest) await actions.extract(tab, 'to', dest)
+  // the archive's OWN folder, not tab.path — in a search tab those differ
+  const dir = entry.path.slice(0, entry.path.lastIndexOf('/')) || tab.path
+  await extractWizard({ archives: [entry.path], suggestedDest: dir, title: entry.name })
+}
+
+/** several archives, one chosen destination for all of them */
+async function extractAllTo(tab: Tab): Promise<void> {
+  const sel = tab.selectedEntries().filter(e => isArchiveName(e.name)).map(e => e.path)
+  if (!sel.length) return
+  await extractWizard({ archives: sel, suggestedDest: tab.path, title: `${sel.length} archives` })
+}
+
+// ---------- Test archive ----------
+
+interface ArchiveTestResult {
+  status: 'ok' | 'wrongPassword' | 'encrypted' | 'corrupt' | 'error'
+  encrypted: boolean
+  entries: number
+  totalSize: number
+  volumes: number
+  type: string
+  error?: string
+}
+
+// .dlg-msg wraps as normal text, so the parts are joined inline, not on lines
+function describeTestResult(name: string, r: ArchiveTestResult): string {
+  const facts = [
+    r.type ? r.type.toUpperCase() : null,
+    `${r.entries} ${r.entries === 1 ? 'item' : 'items'}`,
+    r.totalSize > 0 ? formatSize(r.totalSize) : null,
+    r.volumes > 1 ? `${r.volumes} parts` : null,
+  ].filter(Boolean).join(' · ')
+  switch (r.status) {
+    case 'ok':
+      return `No errors were found in "${name}". (${facts})`
+    case 'wrongPassword':
+      return `"${name}" could not be tested: the password was not accepted.`
+    case 'encrypted':
+      return `"${name}" is encrypted and cannot be tested without its password.`
+    case 'corrupt':
+      return `"${name}" is damaged and cannot be fully read.${r.error ? ` — ${r.error}` : ''}`
+    default:
+      return `"${name}" could not be tested.${r.error ? ` — ${r.error}` : ''}`
+  }
+}
+
+/**
+ * Explorer-style archive integrity check. The backend returns a full verdict
+ * (ok / corrupt / encrypted + counts); showing it is the whole point of the
+ * command — without a result dialog a damaged archive looks exactly like a
+ * healthy one. An encrypted archive is re-tested once with a typed password.
+ */
+async function testArchive(entry: FileEntry): Promise<void> {
+  const run = async (password?: string): Promise<ArchiveTestResult> => {
+    try {
+      return await liq.invoke('testArchive', entry.path, password) as ArchiveTestResult
+    } catch (e) {
+      return {
+        status: 'error', encrypted: false, entries: 0, totalSize: 0, volumes: 1,
+        type: '', error: e instanceof Error ? e.message : String(e),
+      }
+    }
+  }
+  let r = await run()
+  if (r.status === 'encrypted') {
+    const pw = await askArchivePassword(entry.name)
+    if (pw === null) return                        // cancelled: say nothing
+    r = await run(pw)
+  }
+  showConfirm({
+    title: 'Test archive',
+    message: describeTestResult(entry.name, r),
+    okLabel: 'OK',
+    cancelLabel: null,          // informational: one button, like Explorer
+  })
+}
+
+
+// ---------- Send to ----------
+
+interface SendToTarget {
+  id: string
+  label: string
+  icons: string[]
+  path: string
+  action: 'copy' | 'symlink' | 'zip'
+}
+
+/**
+ * Built fresh every time the menu opens: a USB stick plugged in a minute ago
+ * has to appear, and one pulled out must not. The list is small and the reads
+ * are local, so there is nothing to cache.
+ */
+async function sendToSubmenu(tab: Tab, paths: string[]): Promise<MenuItem[]> {
+  let targets: SendToTarget[] = []
+  try { targets = await liq.invoke('sendToTargets') as SendToTarget[] } catch { return [] }
+  return targets.map(t => ({
+    label: t.label,
+    icon: t.icons.join(','),
+    onClick: () => {
+      if (t.action === 'zip') {
+        void liq.startOp({ kind: 'compress', sources: paths, dest: tab.path, format: 'zip' })
+        return
+      }
+      // safe mode still gets its say: sending to a drive is a copy across
+      // volumes, and the destination checks apply exactly as they do elsewhere
+      transferWithConfirm(t.action, paths, t.path, false)
+    },
+  }))
+}
+
+/**
+ * Nemo actions that apply to this selection.
+ *
+ * The desktop's own file-manager extensions — Cinnamon ships fifteen and the
+ * user has added their own — surfaced rather than reimplemented. Filtering
+ * (Selection / Extensions / Mimetypes / Dependencies) happens main-side in
+ * platform/nemoactions.ts, so what comes back is already the applicable set.
+ */
+async function nemoSubmenu(tab: Tab, entries: FileEntry[]): Promise<MenuItem[]> {
+  if (tab.isVirtual) return []
+  const paths = entries.map(e => e.path).filter(p => p.startsWith('/'))
+  if (paths.length !== entries.length) return []
+  let actionsList: NemoAction[] = []
+  try {
+    actionsList = await liq.invoke('nemoActions', {
+      paths,
+      dirs: entries.map(e => e.isDir),
+      mimes: entries.map(e => e.mime),
+    }) as NemoAction[]
+  } catch { return [] }
+  return actionsList.map(a => ({
+    label: a.name,
+    icon: a.icon || undefined,
+    tooltip: a.comment || undefined,
+    onClick: () => { void liq.invoke('runNemoAction', a.id, paths, tab.path) },
+  }))
 }
 
 const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
@@ -67,8 +209,27 @@ const VIEW_MODES: { mode: ViewMode; label: string; shortcut: string }[] = [
 // key list comes from shared/sort.ts so Sort by, Group by, the command bar and
 // the details column chooser always offer the same keys
 
-interface ConfirmOpts { title: string; message: string; okLabel: string; danger?: boolean; onOk: () => void }
+interface ConfirmOpts {
+  title: string
+  message: string
+  okLabel: string
+  /** '' or null hides Cancel — a plain "here is the result" alert */
+  cancelLabel?: string | null
+  danger?: boolean
+  onOk?: () => void
+}
 function showConfirm(o: ConfirmOpts): void { app.emit('show-confirm', o) }
+
+/**
+ * Virtual locations that hold rows the file engine must never be pointed at:
+ * computer:// rows are live drive mount points and the real XDG user folders
+ * (trashing "Documents" from here is one click and cannot be undone), and
+ * archive:// rows live inside a zip. Every destructive verb — cut, delete,
+ * rename, paste-into, compress, extract — is greyed here, exactly as the
+ * command bar (commandbar.ts) and actions.ts already do. trash:// never reaches
+ * this test: it has its own menus with Restore / Delete permanently.
+ */
+function noFileOps(tab: Tab): boolean { return tab.isVirtual }
 
 /** favorites live in main (favorites.json); the menu asks per open, like templates */
 async function isFavorite(path: string): Promise<boolean> {
@@ -90,6 +251,7 @@ async function fetchTemplates(): Promise<TemplateInfo[]> {
 }
 
 async function pasteInto(destDir: string): Promise<void> {
+  if (!destDir.startsWith('/')) return          // archive:// member, not a real folder
   const clip = await liq.clipboardGet()
   if (!clip?.paths?.length) return
   await liq.startOp({ kind: clip.op === 'cut' ? 'move' : 'copy', sources: clip.paths, dest: destDir })
@@ -137,6 +299,10 @@ function confirmPermanentDelete(entries: FileEntry[]): void {
 function deleteEntries(tab: Tab, entries: FileEntry[]): void {
   if (!entries.length) return
   if (tab.path === 'trash://') { confirmPermanentDelete(entries); return }
+  // last line of defence behind the disabled icon: confirmTrash defaults to off,
+  // so one stray click here would silently `gio trash` a whole user folder or a
+  // mount point listed on This PC
+  if (noFileOps(tab)) return
   const doTrash = (): void => { void liq.startOp({ kind: 'trash', sources: entries.map(e => e.path) }) }
   if (app.settings.confirmTrash) {
     const n = entries.length
@@ -164,6 +330,17 @@ function viewSubmenu(tab: Tab): MenuItem[] {
   items.push({
     label: 'Compact view', checked: app.settings.compactView,
     onClick: () => { void app.setSettings({ compactView: !app.settings.compactView }) },
+  })
+  items.push({
+    label: 'Preview pane', shortcut: 'Alt+P', checked: app.settings.showPreviewPane,
+    onClick: () => { void app.setSettings({ showPreviewPane: !app.settings.showPreviewPane }) },
+  })
+  // one pane, two tabs — so these read as Explorer's mutually-exclusive panes
+  // without actually being two elements fighting over the same edge
+  items.push({
+    label: 'Details pane', shortcut: 'Alt+Shift+P',
+    checked: !!app.settings.showPreviewPane && app.settings.showDetailsPane === true,
+    onClick: () => app.emit('toggle-details-pane'),
   })
   return items
 }
@@ -250,6 +427,7 @@ async function showBackgroundMenu(d: Pt): Promise<void> {
     { label: 'View', submenu: viewSubmenu(tab) },
     { label: 'Sort by', submenu: sortSubmenu(tab) },
     { label: 'Group by', submenu: groupSubmenu(tab) },
+    { label: 'Filter by rating', submenu: ratingFilterSubmenu(tab) },
     { label: 'Refresh', onClick: () => actions.refresh(tab) },
     { separator: true },
     {
@@ -266,6 +444,16 @@ async function showBackgroundMenu(d: Pt): Promise<void> {
     {
       label: 'Open in Terminal', icon: 'utilities-terminal', disabled: virtual,
       onClick: () => { void actions.openTerminal(tab) },
+    },
+    {
+      // names that are legal on Linux but break on Windows/CIFS: the share is
+      // read from both, so this is a real problem here rather than a nicety
+      label: 'Fix problem file names…', disabled: virtual,
+      onClick: () => app.emit('show-fixnames', { root: tab.path }),
+    },
+    {
+      label: 'Find duplicate files…', disabled: virtual,
+      onClick: () => app.emit('show-duplicates', { root: tab.path }),
     },
     { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => app.emit('show-properties', [tab.path]) },
   ]
@@ -286,6 +474,11 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
     tab.setSelection(paths, paths[0])
   }
 
+  // built before the branches below so every one of them can offer it; skipped
+  // for virtual rows, which are not files anything can be sent anywhere
+  const sendTo = noFileOps(tab) ? [] : await sendToSubmenu(tab, paths)
+  const nemo = noFileOps(tab) ? [] : await nemoSubmenu(tab, entries)
+
   // Recycle Bin items
   if (tab.path === 'trash://') {
     showMenu([
@@ -300,21 +493,33 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
 
   const single = entries.length === 1 ? entries[0] : null
   const clip = app.clipboard
+  // computer:// / archive:// rows: no verb that writes to them (see noFileOps)
+  const noEdit = noFileOps(tab)
 
   const iconRow: MenuAction[] = [
-    { id: 'cut', icon: I.cut, tooltip: 'Cut (Ctrl+X)', onClick: () => { void actions.cut(tab) } },
-    { id: 'copy', icon: I.copy, tooltip: 'Copy (Ctrl+C)', onClick: () => { void actions.copy(tab) } },
+    { id: 'cut', icon: I.cut, tooltip: 'Cut (Ctrl+X)', disabled: noEdit, onClick: () => { void actions.cut(tab) } },
+    {
+      id: 'copy', icon: I.copy, tooltip: 'Copy (Ctrl+C)',
+      disabled: tab.path === 'computer://',
+      onClick: () => { void actions.copy(tab) },
+    },
   ]
-  if (single?.isDir && clip?.paths?.length) {
+  if (single?.isDir && clip?.paths?.length && single.path.startsWith('/')) {
     iconRow.push({
       id: 'paste-into', icon: I.paste, tooltip: 'Paste into folder',
       onClick: () => { void pasteInto(single.path) },
     })
   }
   if (single) {
-    iconRow.push({ id: 'rename', icon: I.rename, tooltip: 'Rename (F2)', onClick: () => actions.rename(tab) })
+    iconRow.push({
+      id: 'rename', icon: I.rename, tooltip: 'Rename (F2)',
+      disabled: noEdit, onClick: () => actions.rename(tab),
+    })
   }
-  iconRow.push({ id: 'delete', icon: I.del, tooltip: 'Delete (Del)', onClick: () => deleteEntries(tab, entries) })
+  iconRow.push({
+    id: 'delete', icon: I.del, tooltip: 'Delete (Del)',
+    disabled: noEdit, onClick: () => deleteEntries(tab, entries),
+  })
 
   let items: MenuItem[]
   if (single && !single.isDir) {
@@ -325,23 +530,34 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
     const fav = await isFavorite(single.path)
     items = [
       { label: 'Open', onClick: () => { void actions.open(tab) } },
+      // pictures/video/audio/PDF/text can be shown in the floating viewer
+      // without leaving the file manager (media/overlay.ts)
+      ...(isViewable(single)
+        ? [{ label: 'View here', onClick: () => { openInMediaViewer(single, tab.rows, { force: true }) } }]
+        : []),
       { label: 'Open with', submenu: openWithSubmenu(single, apps) },
       { separator: true },
       fav
         ? { label: 'Remove from Favorites', onClick: () => app.emit('remove-from-favorites', [single.path]) }
-        : { label: 'Add to Favorites', onClick: () => app.emit('add-to-favorites', [single.path]) },
+        // send isDir: main cannot stat a remote path safely and would otherwise
+        // guess it from the extension (README on the share => "folder")
+        : { label: 'Add to Favorites', onClick: () => app.emit('add-to-favorites', [{ path: single.path, isDir: single.isDir }]) },
+      { label: 'Rate', submenu: rateSubmenu([single]) },
       { separator: true },
       ...(isArchive ? [
-        { label: 'Extract All...', onClick: () => { void extractAll(tab, single) } },
-        { label: 'Extract here', onClick: () => { void actions.extract(tab, 'auto') } },
+        { label: 'Extract All...', disabled: noEdit, onClick: () => { void extractAll(tab, single) } },
+        { label: 'Extract here', disabled: noEdit, onClick: () => { void actions.extract(tab, 'auto') } },
         {
           label: `Extract to ${archiveStem(single.name)}\\`,
+          disabled: noEdit,
           onClick: () => { void actions.extract(tab, 'named') },
         },
-        { label: 'Test archive', onClick: () => { void liq.invoke('testArchive', single.path) } },
+        { label: 'Test archive', onClick: () => { void testArchive(single) } },
       ] : []),
-      { label: 'Compress to ZIP file', onClick: () => { void actions.compress(tab) } },
+      { label: 'Compress to ZIP file', disabled: noEdit, onClick: () => { void actions.compress(tab) } },
       { separator: true },
+      ...(sendTo.length ? [{ label: 'Send to', submenu: sendTo }] : []),
+      ...(nemo.length ? [{ label: 'Actions', submenu: nemo }] : []),
       { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath(tab) } },
       { separator: true },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
@@ -357,8 +573,18 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
       pinned
         ? { label: 'Unpin from Quick access', onClick: () => { void liq.unpinPlace(single.path) } }
         : { label: 'Pin to Quick access', onClick: () => { void liq.pinPlace(single.path) } },
-      { label: 'Compress to ZIP file', onClick: () => { void actions.compress(tab) } },
+      { label: 'Compress to ZIP file', disabled: noEdit, onClick: () => { void actions.compress(tab) } },
+      ...(sendTo.length ? [{ label: 'Send to', submenu: sendTo }] : []),
+      ...(nemo.length ? [{ label: 'Actions', submenu: nemo }] : []),
       { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath(tab) } },
+      {
+        label: 'Change icon…', disabled: noFileOps(tab),
+        onClick: () => app.emit('show-folder-icon', single.path),
+      },
+      {
+        label: 'Find duplicate files…', disabled: noFileOps(tab),
+        onClick: () => app.emit('show-duplicates', { root: single.path }),
+      },
       { separator: true },
       { label: 'Open in Terminal', icon: 'utilities-terminal', onClick: () => { void liq.openTerminalAt(single.path) } },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
@@ -366,10 +592,57 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
   } else {
     // -- multi-selection --
     const allDirs = entries.every(e => e.isDir)
+    const archives = entries.filter(e => !e.isDir && isArchiveName(e.name))
+    // Explorer drops Open above 15 items (it would spawn 15 windows); we ask
+    // instead of silently doing nothing.
+    const many = entries.length > 15
     items = [
-      { label: allDirs ? 'Open all in tabs' : 'Open', onClick: () => { void actions.open(tab) } },
+      {
+        label: allDirs ? 'Open all in tabs' : `Open${many ? ` (${entries.length} items)` : ''}`,
+        onClick: () => {
+          if (!many) { void actions.open(tab); return }
+          showConfirm({
+            title: 'Open items',
+            message: `This opens ${entries.length} items at once. Continue?`,
+            okLabel: 'Open',
+            onOk: () => { void actions.open(tab) },
+          })
+        },
+      },
       { separator: true },
-      { label: 'Compress to ZIP file', onClick: () => { void actions.compress(tab) } },
+      ...(allDirs ? [] : [{ label: 'Rate', submenu: rateSubmenu(entries) }, { separator: true }]),
+      ...(archives.length ? [
+        {
+          label: `Extract ${archives.length} archives here`,
+          disabled: noEdit,
+          onClick: () => { void actions.extract(tab, 'auto') },
+        },
+        {
+          label: 'Extract each to its own folder',
+          disabled: noEdit,
+          onClick: () => { void actions.extract(tab, 'named') },
+        },
+        {
+          label: 'Extract all to…',
+          disabled: noEdit,
+          onClick: () => { void extractAllTo(tab) },
+        },
+        { separator: true },
+      ] : []),
+      { label: 'Compress to ZIP file', disabled: noEdit, onClick: () => { void actions.compress(tab) } },
+      {
+        label: `Rename ${entries.length} items…`, disabled: noEdit,
+        onClick: () => app.emit('show-bulk-rename', paths),
+      },
+      // comparing several folders against each other is the case this is
+      // actually for — "did I already copy these photos into the other folder?"
+      ...(allDirs ? [{
+        label: `Find duplicates across ${entries.length} folders…`,
+        disabled: noFileOps(tab),
+        onClick: () => app.emit('show-duplicates', { roots: paths }),
+      }] : []),
+      ...(sendTo.length ? [{ label: 'Send to', submenu: sendTo }] : []),
+      ...(nemo.length ? [{ label: 'Actions', submenu: nemo }] : []),
       { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath(tab) } },
       { separator: true },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
@@ -473,9 +746,15 @@ function showTabMenu(d: TabCtx): void {
         })
       },
     },
-    { separator: true },
-    { label: 'Close tab', shortcut: 'Ctrl+W', onClick: () => app.closeTab(i) },
     {
+      label: t.pinned ? 'Unpin tab' : 'Pin tab',
+      onClick: () => app.setTabPinned(i, !t.pinned),
+    },
+    { separator: true },
+    // force: the menu IS the deliberate act that pinning asks for
+    { label: 'Close tab', shortcut: 'Ctrl+W', onClick: () => app.closeTab(i, true) },
+    {
+      // "close others" leaves pinned tabs alone — the whole point of pinning
       label: 'Close other tabs', disabled: app.tabs.length < 2,
       onClick: () => { for (let j = app.tabs.length - 1; j >= 0; j--) if (j !== i) app.closeTab(j) },
     },

@@ -1,9 +1,24 @@
 {
   "name": "liqexplorer",
   "version": "0.1.0",
-  "description": "Windows 11-style file explorer for Linux — LiqExplorer",
+  "description": "Windows 11 File Explorer replica for Linux Mint / Cinnamon \u2014 LiqExplorer",
   "main": "dist/main/index.js",
   "private": true,
+  "scripts": {
+    "build": "bash bin/build.sh",
+    "start": "bash bin/run.sh",
+    "dev": "bash bin/dev.sh",
+    "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit",
+    "setup": "bash bin/setup.sh",
+    "dist:appimage": "npm run build && electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "electron": "^38.2.0",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2",
+    "electron-builder": "^25.1.8"
+  },
   "author": "L1QUIFIER",
   "homepage": "https://github.com/L1QUIFIER/liqexplorer",
   "repository": {
@@ -13,24 +28,9 @@
   "engines": {
     "node": ">=20"
   },
-  "scripts": {
-    "setup": "bash bin/setup.sh",
-    "build": "bash bin/build.sh",
-    "start": "bash bin/run.sh",
-    "dev": "bash bin/dev.sh",
-    "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit",
-    "dist:appimage": "npm run build && electron-builder --linux AppImage"
-  },
   "allowScripts": {
     "electron": true,
     "esbuild": true
-  },
-  "devDependencies": {
-    "@types/node": "^20.19.0",
-    "electron": "^38.2.0",
-    "electron-builder": "^25.1.8",
-    "esbuild": "^0.25.9",
-    "typescript": "^5.9.2"
   },
   "build": {
     "appId": "app.liqexplorer",
@@ -46,7 +46,9 @@
     ],
     "extraResources": [],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "System;FileTools;FileManager;",
       "icon": "assets/icons",
       "synopsis": "Windows 11-style file explorer for Linux",

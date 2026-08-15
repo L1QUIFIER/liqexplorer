@@ -17,8 +17,10 @@
 // abort, and NO auto-collapsing ever — a user's manual collapse wins until
 // the next navigation.
 import type { AppSettings, FileEntry, Place } from '../../shared/types'
+import { FINDER_URI } from '../../shared/types'
 import { app, liq, HOME_URI } from '../core/app'
 import type { Tab } from '../core/app'
+import { defaultDragEffect } from '../views/rightdrag'
 
 const MIN_W = 120
 const MAX_W = 420
@@ -70,6 +72,20 @@ interface Section {
 export function mountNavPane(root: HTMLElement): void {
   const pane = root
   const splitter = document.getElementById('navpane-splitter')
+
+  // A deep tree in a narrow pane truncates hard: three sibling folders can all
+  // render as "js-ol…", which tells the user nothing. Explorer answers this
+  // with a tooltip, so do the same — but only on names that ARE truncated, or
+  // every folder in the tree would pop a tooltip that just repeats itself.
+  // Delegated and computed on hover, because rows are rebuilt constantly and
+  // the answer changes whenever the splitter moves.
+  pane.addEventListener('mouseover', (e) => {
+    const lb = (e.target as HTMLElement).closest?.('.nav-label') as HTMLElement | null
+    if (!lb) return
+    const truncated = lb.scrollWidth > lb.clientWidth + 1
+    if (truncated) lb.title = lb.textContent || ''
+    else lb.removeAttribute('title')
+  })
 
   // right-click on empty pane space (rows stopPropagation, so only blank area
   // reaches here) — Explorer's nav-pane options menu
@@ -169,6 +185,46 @@ export function mountNavPane(root: HTMLElement): void {
     return false
   }
 
+  /** a drag that started in this window carries our own type */
+  function dtIsInternal(dt: DataTransfer): boolean {
+    return Array.from(dt.types).includes('application/x-liq-paths')
+  }
+
+  // dragover may not call getData(), so remember what an internal drag carries
+  // when it starts (views/dnd.ts has already setData() by the time this bubbles
+  // to the document). Only used to pick the CURSOR; the drop reads the real
+  // sources itself.
+  let dragSources: string[] | null = null
+  document.addEventListener('dragstart', (e) => {
+    dragSources = null
+    const raw = e.dataTransfer?.getData('application/x-liq-paths')
+    if (!raw) return
+    try {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr) && typeof arr[0] === 'string') dragSources = arr as string[]
+    } catch { /* not ours */ }
+  })
+  document.addEventListener('dragend', () => { dragSources = null })
+
+  /**
+   * Explorer's drag semantics, identical to the item view (views/dnd.ts):
+   * external drags COPY (they belong to another app), Ctrl copies, Shift moves,
+   * and the bare default is move within a volume / copy across it. The nav pane
+   * used to move unconditionally, so dragging a file from the CIFS share onto
+   * "Documents" deleted it from the share, and a drop from Nemo moved the file
+   * out of Nemo's folder.
+   */
+  function dropKind(
+    e: MouseEvent & { dataTransfer?: DataTransfer | null },
+    internal: boolean, source: string | undefined, dest: string,
+  ): 'copy' | 'move' | 'symlink' {
+    if (!internal) return 'copy'
+    if (e.altKey || (e.ctrlKey && e.shiftKey)) return 'symlink'
+    if (e.ctrlKey) return 'copy'
+    if (e.shiftKey) return 'move'
+    return source ? defaultDragEffect(source, dest) : 'move'
+  }
+
   function pathsFromDrop(dt: DataTransfer): string[] {
     const custom = dt.getData('application/x-liq-paths')
     if (custom) {
@@ -207,7 +263,11 @@ export function mountNavPane(root: HTMLElement): void {
       const dt = e.dataTransfer
       if (!dt || !dtHasFiles(dt)) return
       e.preventDefault()
-      dt.dropEffect = opts.trash || !e.ctrlKey ? 'move' : 'copy'
+      const kind = opts.trash
+        ? 'move'
+        : dropKind(e, dtIsInternal(dt), dragSources?.[0], normPath(dest))
+      // the DataTransfer API has no "link" effect; Alt still creates a shortcut
+      dt.dropEffect = kind === 'copy' ? 'copy' : 'move'
       row.classList.add('drop-target')
       const n = opts.node
       if (n && n.expandable && !n.expanded && !hoverTimer) {
@@ -226,20 +286,22 @@ export function mountNavPane(root: HTMLElement): void {
       if (!dt || !dtHasFiles(dt)) return
       e.preventDefault()
       e.stopPropagation()
+      const internal = dtIsInternal(dt)
       const sources = pathsFromDrop(dt)
+      dragSources = null
       if (!sources.length) return
       if (opts.trash) { void liq.startOp({ kind: 'trash', sources }); return }
       const destN = normPath(dest)
-      const copy = e.ctrlKey
+      const kind = dropKind(e, internal, sources[0], destN)
       const valid = sources.map(normPath).filter((s) => {
         if (s === destN) return false
         if (destN.startsWith(s + '/')) return false            // dest inside source
         const parent = s.slice(0, s.lastIndexOf('/')) || '/'
-        if (parent === destN && !copy) return false            // move into own dir = no-op
+        if (parent === destN && kind === 'move') return false   // move into own dir = no-op
         return true
       })
       if (!valid.length) return
-      void liq.startOp({ kind: copy ? 'copy' : 'move', sources: valid, dest: destN })
+      void liq.startOp({ kind, sources: valid, dest: destN })
     })
   }
 
@@ -503,10 +565,14 @@ export function mountNavPane(root: HTMLElement): void {
     row.append(spacer, makeIcon(place.icons), makeLabel(place.label))
     if (opts.pin) {
       const pin = document.createElement('span')
-      pin.className = 'nav-pin'
-      pin.title = 'Unpin from Quick access'
+      const pinned = place.pinned === true || place.kind === 'pinned'
+      pin.className = 'nav-pin' + (pinned ? ' is-pinned' : '')
+      pin.title = pinned ? 'Unpin from Quick access' : 'Pin to Quick access'
       pin.innerHTML = PIN_SVG
-      pin.addEventListener('click', (e) => { e.stopPropagation(); void liq.unpinPlace(place.path) })
+      pin.addEventListener('click', (e) => {
+        e.stopPropagation()
+        void (pinned ? liq.unpinPlace(place.path) : liq.pinPlace(place.path))
+      })
       row.appendChild(pin)
     }
     wireRowNav(row, place.path)
@@ -548,6 +614,17 @@ export function mountNavPane(root: HTMLElement): void {
       { noContext: true },     // nothing in the place menu applies to a virtual page
     )
 
+    // Starred — everything rated, machine-wide. Synthesized here rather than in
+    // platform/places.ts for the same reason as the Home row: it is a page this
+    // renderer owns, not a mount the system told us about.
+    addFlatRow(
+      {
+        id: 'starred', kind: 'home', label: 'Starred', path: 'starred://',
+        icons: ['starred', 'emblem-favorite', 'bookmarks'],
+      },
+      { noContext: true },
+    )
+
     // Quick access — the pinned entries, under a header that names them:
     // without it a "Pin to Quick access" looks like it did nothing.
     const secQuick = makeSection('quick', 'Quick access',
@@ -577,6 +654,18 @@ export function mountNavPane(root: HTMLElement): void {
 
     // Network — network drives + gvfs mounts (fuse paths are also tree roots)
     const secNet = makeSection('network', 'Network', ['network-workgroup', 'network-server', 'folder-remote'], null)
+    // Server Index — the FileFinder search surface. A flat row, not a tree root:
+    // it has no listing of its own, only search results. Hidden entirely when
+    // the feature is off, which is the default.
+    if (app.settings.filefinderEnabled) {
+      addFlatRow(
+        {
+          id: 'filefinder', kind: 'home', label: 'Server Index', path: FINDER_URI,
+          icons: ['network-server', 'folder-remote', 'system-search'],
+        },
+        { parent: secNet.childrenEl, depth: 1, noContext: true },
+      )
+    }
     for (const p of places) {
       if (p.kind === 'network-drive' || p.kind === 'gvfs' || p.kind === 'network') {
         addRoot(p, secNet, ['folder-remote', 'network-server'])

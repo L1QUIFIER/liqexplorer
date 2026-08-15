@@ -14,7 +14,6 @@ import * as path from 'node:path'
 import type { ClipboardFiles } from '../../shared/types'
 import { broadcast } from '../windows'
 import { PUSH } from '../../shared/ipc'
-import { getCapabilities } from './capabilities'
 
 let state: ClipboardFiles | null = null
 let helper: ChildProcess | null = null
@@ -79,18 +78,6 @@ export async function setFiles(data: ClipboardFiles): Promise<void> {
   killHelper()
   extCache = null
   state = data
-
-  const caps = getCapabilities()
-  // Without PyGObject we still keep an in-app clipboard so Paste works inside
-  // LiqExplorer; other FMs won't see the cut/copy.
-  if (caps && !caps.pythonGi) {
-    try {
-      clipboard.writeText(data.paths.join('\n'))
-    } catch { /* headless */ }
-    broadcast(PUSH.clipboardChanged, state)
-    return
-  }
-
   await new Promise<void>(resolve => {
     let child: ChildProcess
     try {

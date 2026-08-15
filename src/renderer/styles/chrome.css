@@ -474,14 +474,6 @@
 }
 .sb-count { padding-left: 14px; white-space: nowrap; }
 .sb-sel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sb-warn {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 42vw;
-  opacity: 0.85;
-  color: var(--text-secondary, inherit);
-}
 .sb-spacer { flex: 1; }
 .sb-toggle {
   width: 30px;
@@ -510,3 +502,38 @@
   outline-offset: -2px;
 }
 #navrow input:focus-visible { outline: none; }
+
+/* ---- pinned tabs ---------------------------------------------------------
+   A pinned tab narrows to its icon (Chrome/Edge behaviour): the point is to
+   keep a folder one click away without spending strip width on its name. The
+   pin sits where the ✕ would be, always visible — it is what tells the user
+   why this tab has no close button, and it is how to give it one back. */
+/* icon + pin only. A pinned tab squeezed to fit a label renders it as "d…",
+   which reads as a bug rather than as a deliberate narrow tab — the folder
+   icon and the hover tooltip (the full path) identify it far better. */
+.tb-tab.pinned {
+  min-width: 0;
+  width: auto;
+  flex: none;
+  padding: 0 4px 0 8px;
+  gap: 4px;
+}
+.tb-tab.pinned .tb-tab-title { display: none; }
+.tb-tab-pin {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  opacity: .75;
+  transition: background-color var(--dur-fast) var(--ease-fluent),
+              color var(--dur-fast) var(--ease-fluent),
+              opacity var(--dur-fast) var(--ease-fluent);
+}
+.tb-tab:hover .tb-tab-pin,
+.tb-tab.active .tb-tab-pin { opacity: 1; }
+.tb-tab-pin:hover { background: var(--bg-hover-strong); color: var(--text-primary); opacity: 1; }
+.tb-tab-pin:active { background: var(--bg-press); }

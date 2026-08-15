@@ -5,12 +5,17 @@ import { mountNavRow } from './chrome/navrow'
 import { mountCommandBar } from './chrome/commandbar'
 import { mountStatusBar } from './chrome/statusbar'
 import { mountNavPane } from './nav/navpane'
-import { mountViewHost } from './views/view-host'
-import { mountHome } from './views/home'
+import { mountPanes } from './views/panes'
+import { mountPreviewPane } from './views/preview'
 import { mountMenus } from './menus/context-menus'
 import { mountDialogs } from './dialogs/dialogs'
 import { mountKeyboard } from './core/keyboard'
 import { mountScrollHover } from './core/scrollhover'
+// side-effect import: views/dropbins.ts builds its own container and injects
+// its own stylesheet at import time, so it has no mount function to call
+import './views/dropbins'
+// side-effect: drives the no-blur class for every floating surface
+import './chrome/surfaces'
 
 async function boot() {
   ;(window as unknown as { app: typeof app }).app = app  // for CDP-driven testing
@@ -31,8 +36,10 @@ async function boot() {
   mountNavRow($('navrow'))
   mountCommandBar($('commandbar'))
   mountNavPane($('navpane'))
-  mountViewHost($('viewhost'))
-  mountHome($('homehost'))          // shows/hides itself opposite #viewhost (home://)
+  // both panes: each gets its own view host + Home page (the second stays
+  // hidden until the tab is split). See views/panes.ts.
+  mountPanes()
+  mountPreviewPane($('sidepane'))   // after the command bar: it wires .cb-preview
   mountStatusBar($('statusbar'))
   mountMenus()
   mountDialogs()

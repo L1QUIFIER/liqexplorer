@@ -1,0 +1,44 @@
+/* Live media previews (views/livemedia.ts). The player is an overlay INSIDE the
+   tile's own .vh-thumbwrap, laid exactly over the static thumbnail: same box,
+   same aspect, no background — so starting and stopping moves nothing, and the
+   thumbnail underneath is the fallback for free. This file is injected by
+   livemedia.ts at import time; index.html has no <link> for it. */
+
+.vh-thumbwrap { position: relative; }
+
+.vh-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 2px;
+  /* Load-bearing. view-host.ts decides drag-vs-rubber-band from what the press
+     landed on (.vh-icon/.vh-label/.vh-check/.vh-thumbimg), and hover detection
+     reads the same elements — an overlay that swallowed pointer events would
+     make video tiles undraggable and unhoverable. */
+  pointer-events: none;
+  /* deliberately transparent: the letterboxed edges show the identical
+     thumbnail through, so there is no black frame and no visible swap */
+  background: none;
+}
+
+/* Scrub position. Drawn only on tiles wide enough to scrub (>= 64px), because
+   below that a 2px bar over a 48px icon is noise rather than information. */
+.vh-live-bar {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgb(0 0 0 / 35%);
+  pointer-events: none;
+  overflow: hidden;
+}
+.vh-live-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}

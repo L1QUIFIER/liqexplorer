@@ -27,6 +27,8 @@ export const PUSH = {
   favoritesChanged: 'liqpush:favorites-changed', // FavoriteEntry[]
   indexStatus: 'liqpush:index-status',      // IndexStatus
   opPassword: 'liqpush:op-password',        // PasswordRequest
+  folderIconsChanged: 'liqpush:folder-icons',   // { path }
+  mediaCacheReady: 'liqpush:media-cache-ready', // { path, file } — file '' means the conversion failed
 } as const
 
 /** The API surface preload exposes as window.liq */
@@ -100,12 +102,6 @@ export interface LiqApi {
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   getTheme(): Promise<'light' | 'dark'>
-  /** Host tool availability (gio, rg, 7z, Wayland notes, …). Soft-fail guide. */
-  getCapabilities(): Promise<{
-    gio: boolean; gsettings: boolean; ripgrep: boolean; python3: boolean; pythonGi: boolean
-    sevenZip: boolean; unrar: boolean; unar: boolean; udisksctl: boolean; xdgMime: boolean
-    wayland: boolean; x11Display: boolean; warnings: string[]
-  } | null>
 
   // --- windows / native ---
   newWindow(path?: string): Promise<void>

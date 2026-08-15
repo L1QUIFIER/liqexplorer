@@ -68,6 +68,9 @@ img.vh-icon { object-fit: contain; flex: none; }
   align-items: center;
   justify-content: center;
   flex: none;
+  /* the anchor for corner badges (rating, and later duration) — positioning
+     them against the picture is what keeps them off the filename */
+  position: relative;
 }
 img.vh-thumbimg { border-radius: 2px; }
 
@@ -94,6 +97,12 @@ img.vh-thumbimg { border-radius: 2px; }
 .vh-seccell {
   color: var(--text-secondary);
   font-size: var(--fs-caption);
+  white-space: nowrap;
+}
+.vh-celltext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .vh-seccell.vh-right { justify-content: flex-end; text-align: right; }
@@ -148,6 +157,19 @@ img.vh-thumbimg { border-radius: 2px; }
   position: relative;
 }
 .vh-grid .vh-label {
+  /* flex:none is load-bearing — as a shrinkable flex item the label was squeezed
+     BELOW the two lines -webkit-line-clamp reserves (26px for a 30px clamp), so
+     the second line was sliced in half and no ellipsis was ever drawn. */
+  flex: none;
+  min-height: 30px;
+  /* DESCENDERS. A -webkit-box clamped to N lines is exactly N*line-height tall,
+     but the font's ink for the last line runs ~1px past that — measured:
+     scrollHeight 91 against clientHeight 90 at six lines, and the same +1 at
+     two and four. The box hides the overflow, so the tails of g/j/p/q/y on the
+     final line were shaved off. Names like "…Fotosik.pl [579x370].jpg" are made
+     of those letters, which is why it read as "the text is cut off".
+     padding-bottom grows the box instead of the clip. */
+  padding-bottom: 2px;
   width: calc(100% - 4px);
   margin-top: 6px;
   text-align: center;
@@ -159,8 +181,18 @@ img.vh-thumbimg { border-radius: 2px; }
   -webkit-box-orient: vertical;
   word-break: break-word;
 }
-.vh-grid.selected { z-index: 2; }
-.vh-grid.selected .vh-label { -webkit-line-clamp: 8; }
+.vh-grid.selected { z-index: 2; overflow: visible; }
+/* the selected item shows its whole name, spilling over its neighbours the way
+   Explorer does — with a background so the overlap stays readable */
+.vh-grid.selected .vh-label {
+  -webkit-line-clamp: 8;
+  background: var(--bg-selected);
+  border-radius: var(--radius);
+  /* the bottom 2px is NOT decoration: the shorthand would otherwise reset the
+     descender allowance set above, and the selected state is exactly when the
+     label is longest and the last line most likely to carry a g/j/p/q/y */
+  padding: 0 3px 2px;
+}
 
 /* ---------- group headers ----------
    The whole row is a click target (selects the group); the chevron is its own
@@ -444,6 +476,39 @@ img.vh-thumbimg { border-radius: 2px; }
   text-align: center;
 }
 
+/* ---------- search results banner: how the answer was produced ---------- */
+.vh-searchbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  min-height: 28px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  font: var(--fs-caption) / 1.35 var(--font-ui);
+  color: var(--text-secondary);
+  background: var(--bg-layer);
+  border-bottom: 1px solid var(--divider);
+}
+.vh-searchbar-text { flex: 1; min-width: 0; }
+.vh-searchbar-act {
+  flex: none;
+  font: var(--fs-caption) / 1 var(--font-ui);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.vh-searchbar-act:hover { text-decoration: underline; }
+.vh-root.vh-has-searchbar .vh-scroll { top: 28px; }
+/* both bars at once: stack them rather than overlap */
+.vh-root.vh-has-ratebar.vh-has-searchbar .vh-searchbar { top: 26px; }
+.vh-root.vh-has-ratebar.vh-has-searchbar .vh-scroll { top: 54px; }
+
 /* ---------- states: loading / empty / error ---------- */
 .vh-state {
   position: absolute;
@@ -487,3 +552,29 @@ body.is-rightdragging * { cursor: copy !important; }
 body.is-colresizing,
 body.is-colresizing * { cursor: col-resize !important; }
 .crumb.drop-target { background: var(--accent-selection); border-radius: var(--radius); }
+
+/* running time on a video thumbnail. Bottom-LEFT because the rating badge owns
+   bottom-right, and both are inside .vh-thumbwrap so neither can reach the
+   filename. Tabular figures so the width does not jitter as the digits change. */
+.vh-dur {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* the shared media renderer's elements inside the preview pane: it sizes its
+   own <video>/<img> to fill the host, so the host is what constrains them */
+.pv-body .pv-stage .mvr-video { max-width: 100%; max-height: 260px; }
+.pv-body .pv-audiohost { display: block; }
+.pv-body .pv-audiohost .mvr-audio { display: block; width: 100%; }
+.pv-body .pv-audiohost .mvr-note,
+.pv-body .pv-stage .mvr-note { font-size: var(--fs-caption); color: var(--text-secondary); padding: 6px 2px; }

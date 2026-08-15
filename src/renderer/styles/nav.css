@@ -104,7 +104,11 @@
   color: var(--text-secondary);
 }
 
-/* ---- pin glyph on quick-access rows (hover-revealed) ---- */
+/* ---- pin glyph on quick-access rows ----
+   A PINNED row shows its pin permanently: hiding it until hover made pinned
+   folders look identical to ordinary ones, so there was no way to tell what was
+   pinned. It sits dim at rest and lights up on hover (where it also becomes the
+   unpin button); unpinnable-but-not-pinned rows keep the old hover reveal. */
 .nav-pin {
   width: 20px;
   height: 20px;
@@ -120,7 +124,9 @@
               background-color var(--dur-fast) var(--ease-fluent),
               color var(--dur-fast) var(--ease-fluent);
 }
+.nav-pin.is-pinned { opacity: 0.55; }
 .nav-row:hover .nav-pin,
+.nav-pin.is-pinned:hover,
 .nav-pin:focus-visible { opacity: 1; }
 .nav-pin:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
 .nav-pin:active { background: var(--bg-press); color: var(--text-primary); }

@@ -10,8 +10,15 @@
 //        /usr/share/thumbnailers entry (max 4 concurrent, 10s timeout), inject
 //        Thumb::URI/Thumb::MTime tEXt chunks, chmod 0600 and atomically rename
 //        into the shared cache; failures get a marker in fail/liqexplorer/.
+//
+//   liqfile://file/?path=<encodeURIComponent(abs path)>[&type=<mime>]
+//     -> raw bytes for the preview pane (<img>/<video>/<audio>/<embed>), with
+//        real HTTP range support so media seeking works. UNLIKE the two schemes
+//        above this one MUST be registered `standard: true` — see the note in
+//        shared/preview.ts: a non-standard scheme makes Chromium reject every
+//        resumed media range request, which preload="metadata" guarantees.
 
-import { protocol, net } from 'electron'
+import { ipcMain, net, protocol } from 'electron'
 import { spawn } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
@@ -19,13 +26,38 @@ import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as zlib from 'node:zlib'
+import { Readable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import { resolveIcon } from './icons'
+import { mimeForName } from '../fs/mime'
+import { getSettings } from '../state/settings'
+import { FOLDER_ICON_DIR } from './foldericons'
+
+/** honours the View setting; a cached thumbnail is still served when off */
+function thumbnailsRemoteEnabled(): boolean {
+  try { return getSettings().thumbnailsRemote !== false } catch { return true }
+}
+import { CH } from '../../shared/ipc'
+import { LIQFILE_HOST } from '../../shared/preview'
+import './preview'          // self-registers previewText / previewTags over IPC
+import { registerPlayProtocol } from './transcode'
+import './mediawindow'      // self-registers mediaPopout* (the floating viewer's separate window)
+import '../fs/peek'         // self-registers peekDir / peekCancel over IPC
 
 export function protocolPrivileges() {
   return [
     { scheme: 'liqicon', privileges: { standard: false, secure: true, supportFetchAPI: true } },
     { scheme: 'liqthumb', privileges: { standard: false, secure: true, supportFetchAPI: true } },
+    {
+      scheme: 'liqfile',
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+    },
+    {
+      // same privileges as liqfile: `stream` is what lets a <video> consume the
+      // response progressively instead of waiting for it to finish
+      scheme: 'liqplay',
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+    },
   ]
 }
 
@@ -297,7 +329,24 @@ export function isRemotePath(p: string): boolean {
 type ThumbSize = 'normal' | 'large' | 'x-large' | 'xx-large'
 const SIZE_ORDER: ThumbSize[] = ['normal', 'large', 'x-large', 'xx-large']
 const SIZE_PX: Record<ThumbSize, number> = { normal: 128, large: 256, 'x-large': 512, 'xx-large': 1024 }
-const MAX_REMOTE_BYTES = 50 * 1024 * 1024
+// Size limits for GENERATING a thumbnail of a file on a network mount (a
+// cached thumbnail is always served regardless). One blanket 50MB cap used to
+// apply, which silently killed previews for exactly the files people most want
+// them for — a folder of videos on the SMB share. Measured on this machine:
+// ffmpegthumbnailer SEEKS to a frame, so a video thumbnail off the share takes
+// ~0.1s no matter how big the file is, while an image must be read whole.
+// Hence per-type limits rather than one number.
+const REMOTE_LIMITS = {
+  video: 16 * 1024 * 1024 * 1024,   // seek-based: size is irrelevant
+  image: 512 * 1024 * 1024,         // read whole; still generous
+  other: 128 * 1024 * 1024,         // pdf/office/etc: read whole, usually small
+}
+
+function remoteLimitFor(mime: string): number {
+  if (mime.startsWith('video/')) return REMOTE_LIMITS.video
+  if (mime.startsWith('image/')) return REMOTE_LIMITS.image
+  return REMOTE_LIMITS.other
+}
 
 function cacheRoot(): string {
   return process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache')
@@ -312,14 +361,67 @@ const inflight = new Map<string, Promise<Buffer | null>>()
 let running = 0
 const queue: (() => void)[] = []
 
+// Thumbnailers are short-lived and mostly I/O bound;
+// 4 at a time left a big folder trickling in. Bounded so a pathological folder
+// still cannot fork-bomb the machine.
+const MAX_THUMB_JOBS = Math.max(4, Math.min(8, os.cpus().length >> 2))
+
+/**
+ * BACKPRESSURE WHILE A VIDEO IS STARTING.
+ *
+ * The grid thumbnailer and the media player read the same CIFS share, and the
+ * thumbnailer wins by weight of numbers: eight processes each pulling frames
+ * out of files the user is scrolling past, against one player trying to fill
+ * its buffer. The player is the thing the user is looking at, so for a short
+ * window it gets the share to itself and the thumbnail backlog waits.
+ *
+ * A HOLD IS A LEASE, NOT A LOCK. It expires on its own, because the alternative
+ * is that one dropped release (a crashed renderer, a media element that never fires
+ * its event) silently stops thumbnails for the rest of the session.
+ */
+const HOLD_MS = 4_000
+let holdUntil = 0
+let holdTimer: NodeJS.Timeout | null = null
+
+export function holdThumbnails(ms = HOLD_MS): void {
+  holdUntil = Math.max(holdUntil, Date.now() + ms)
+  if (holdTimer) clearTimeout(holdTimer)
+  holdTimer = setTimeout(() => { holdTimer = null; drainQueue() }, Math.max(0, holdUntil - Date.now()))
+  holdTimer.unref?.()
+}
+
+export function releaseThumbnails(): void {
+  holdUntil = 0
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null }
+  drainQueue()
+}
+
+/** let the backlog through in a trickle rather than all at once: eight probes
+ *  starting the instant a video reaches steady state would stutter it again */
+function drainQueue(): void {
+  let n = 0
+  while (running < MAX_THUMB_JOBS && queue.length && n < 2) {
+    const next = queue.pop()
+    if (!next) break
+    next()
+    n++
+  }
+  if (queue.length) setTimeout(drainQueue, 120).unref?.()
+}
+
 function acquireSlot(): Promise<void> {
-  if (running < 4) { running++; return Promise.resolve() }
+  const held = Date.now() < holdUntil
+  if (!held && running < MAX_THUMB_JOBS) { running++; return Promise.resolve() }
   return new Promise(res => queue.push(() => { running++; res() }))
 }
 
 function releaseSlot(): void {
   running--
-  const next = queue.shift()
+  if (Date.now() < holdUntil) return   // a video is loading; the backlog waits
+  // LIFO, not FIFO: while scrolling, the newest requests are the tiles actually
+  // on screen. Served oldest-first, a fast scroll through a large folder spends
+  // its budget rendering rows the user has already passed.
+  const next = queue.pop()
   if (next) next()
 }
 
@@ -437,9 +539,12 @@ async function handleThumb(reqUrl: string): Promise<Response> {
   if (marker) { negCache.set(hash, mtimeSec); return new Response('', { status: 404 }) }
 
   // 3. generation policy: skip large remote files
-  if (st.size > MAX_REMOTE_BYTES && isRemotePath(filePath)) {
-    negCache.set(hash, mtimeSec)
-    return new Response('', { status: 404 })
+  if (isRemotePath(filePath)) {
+    if (!thumbnailsRemoteEnabled()) return new Response('', { status: 404 })
+    if (st.size > remoteLimitFor(mimeForName(path.basename(filePath), false))) {
+      negCache.set(hash, mtimeSec)
+      return new Response('', { status: 404 })
+    }
   }
 
   const buf = await generateThumb(filePath, uri, hash, size, mtimeSec)
@@ -462,6 +567,7 @@ function iconFileRoots(): string[] {
     '/usr/share/pixmaps/',
     path.join(h, '.icons') + '/',
     path.join(h, '.local/share/icons') + '/',
+    FOLDER_ICON_DIR + '/',        // icons the user picked for folders
   ]
 }
 
@@ -497,9 +603,87 @@ async function handleIcon(reqUrl: string): Promise<Response> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// liqfile handler — raw file bytes for the preview pane
+// ---------------------------------------------------------------------------
+
+/** stat() on a dead CIFS mount blocks forever; the request must not. */
+function statDeadline(p: string, ms: number): Promise<fs.Stats | null> {
+  return new Promise(resolve => {
+    let done = false
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(null) } }, ms)
+    fsp.stat(p).then(
+      st => { if (!done) { done = true; clearTimeout(timer); resolve(st) } },
+      () => { if (!done) { done = true; clearTimeout(timer); resolve(null) } },
+    )
+  })
+}
+
+const RANGE_RE = /^bytes=(\d*)-(\d*)$/
+
+async function handleFile(reqUrl: string, rangeHeader: string | null): Promise<Response> {
+  // standard scheme, so the URL always carries the fixed host segment
+  if (!reqUrl.startsWith(`liqfile://${LIQFILE_HOST}/`)) return new Response('', { status: 400 })
+  const qIdx = reqUrl.indexOf('?')
+  const hIdx = reqUrl.indexOf('#')
+  const query = qIdx < 0 ? '' : reqUrl.slice(qIdx + 1, hIdx > qIdx ? hIdx : undefined)
+  const params = new URLSearchParams(query)
+  const filePath = params.get('path') ?? ''
+  if (!filePath.startsWith('/')) return new Response('', { status: 400 })
+
+  const st = await statDeadline(filePath, 5000)
+  if (!st || !st.isFile()) return new Response('', { status: 404 })
+  const size = st.size
+  const type = params.get('type') || mimeForName(path.basename(filePath), false) || 'application/octet-stream'
+
+  let start = 0
+  let end = size - 1
+  let status = 200
+  if (rangeHeader) {
+    const m = RANGE_RE.exec(rangeHeader.trim())
+    if (m) {
+      if (m[1] === '') {
+        // suffix range: bytes=-N (last N bytes)
+        const n = Number(m[2] || 0)
+        start = n > 0 ? Math.max(0, size - n) : size
+      } else {
+        start = Number(m[1])
+        if (m[2] !== '') end = Math.min(end, Number(m[2]))
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+        return new Response('', { status: 416, headers: { 'content-range': `bytes */${size}` } })
+      }
+      status = 206
+    }
+  }
+
+  const headers: Record<string, string> = {
+    'content-type': type,
+    'accept-ranges': 'bytes',
+    'content-length': String(end - start + 1),
+    // the pane re-reads on every selection; a stale preview would be worse than
+    // a re-read, and Chromium keeps its own media buffer anyway
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  }
+  if (status === 206) headers['content-range'] = `bytes ${start}-${end}/${size}`
+  if (size === 0) return new Response('', { status, headers })
+
+  const stream = fs.createReadStream(filePath, { start, end })
+  // a cancelled request (seek, pane closed) destroys the stream — never crash
+  stream.on('error', () => { /* the body just ends */ })
+  return new Response(Readable.toWeb(stream) as unknown as ReadableStream, { status, headers })
+}
+
+ipcMain.handle(CH('holdThumbnails'), (_e: unknown, ms?: number) => { holdThumbnails(typeof ms === 'number' ? ms : undefined); return true })
+ipcMain.handle(CH('releaseThumbnails'), () => { releaseThumbnails(); return true })
+
 export function registerProtocols(): void {
   protocol.handle('liqicon', (req) => handleIcon(req.url).catch(() => new Response('', { status: 404 })))
   protocol.handle('liqthumb', (req) => handleThumb(req.url).catch(() => new Response('', { status: 404 })))
+  protocol.handle('liqfile', (req) =>
+    handleFile(req.url, req.headers.get('range')).catch(() => new Response('', { status: 404 })))
+  registerPlayProtocol()
 }
 
 /** internals exposed for tests only — not part of the module contract */

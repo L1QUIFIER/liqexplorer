@@ -32,8 +32,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { CH, PUSH } from '../../shared/ipc'
 import type { FileEntry, IndexStatus } from '../../shared/types'
 import { getSettings, stateDir } from '../state/settings'
-import { isRemotePath, mountPoints } from '../fs/list'
-import { mimeForName, iconsForMime, folderIcons } from '../fs/mime'
+import { entryNoStat, isRemotePath, mountPoints } from '../fs/list'
 
 const MAGIC = '#liqindex1'
 const DB_NAME = 'index.db'
@@ -52,11 +51,29 @@ const MAX_ENTRIES = 2_000_000
 const SKIP_DIRS = new Set(['/proc', '/sys', '/dev', '/run', '/var/run', '/var/lock', '/lost+found'])
 /** a rebuild is offered when the index is older than this and a search used it */
 const STALE_MS = 30 * 60_000
+/**
+ * Ceiling on ONE readdir/lstat batch (fs/watch.ts uses 5s for a single stat;
+ * a directory listing on a busy share legitimately takes longer). The CIFS
+ * share here is mounted `hard`, so a dead server never returns an error — the
+ * call simply retries forever — and without this the scan, the status pushes
+ * and every later build are wedged for the life of the process.
+ */
+const IO_TIMEOUT_MS = 15_000
+/** timeouts inside one root before the whole root is abandoned as unreachable */
+const MAX_TIMEOUTS_PER_ROOT = 3
+/** supervisor cadence: refresh scheduling + wedged-scan detection */
+const SUPERVISOR_MS = 60_000
+/** consecutive supervisor ticks with zero progress before a scan is abandoned */
+const STALL_TICKS = 2
 
 interface IndexMeta {
-  version: 1
+  /** 2 = adds `covered`; a v1 file is ignored and rebuilt (it over-claimed) */
+  version: 2
   builtAt: number
+  /** the roots this build was CONFIGURED with (drift detection) */
   roots: string[]
+  /** the roots actually walked to completion — the only ones searches may use */
+  covered: string[]
   files: number
   dirs: number
 }
@@ -65,6 +82,10 @@ interface Scan {
   cancelled: boolean
   root: string
   seen: number
+  /** dirs + entries; only used to tell "slow" from "wedged" */
+  progress: number
+  lastProgress: number
+  stallTicks: number
 }
 
 let meta: IndexMeta | null = null
@@ -74,6 +95,10 @@ let text: string | null = null
 let scan: Scan | null = null
 let lastError = ''
 let statusTimer: NodeJS.Timeout | null = null
+/** the user said stop (Clear/Cancel): the supervisor must not undo that */
+let autoBuildBlocked = false
+/** when a build last STARTED — failures retry on the interval, not every tick */
+let lastBuildAttempt = 0
 
 const dbPath = (): string => path.join(stateDir(), DB_NAME)
 const metaPath = (): string => path.join(stateDir(), META_NAME)
@@ -133,11 +158,17 @@ function under(p: string, root: string): boolean {
   return p === root || p.startsWith(root === '/' ? '/' : root + '/')
 }
 
-/** true when the index is built and its roots contain p */
+/**
+ * True when the index is built and ACTUALLY holds p's subtree. `covered` is
+ * what was walked to completion, not what was configured: a root that was
+ * unreadable at scan time (offline share) or cut off by MAX_ENTRIES has no
+ * entries in the db, and claiming it here is what turns "the index cannot
+ * answer" into a confident "no items match your search".
+ */
 export function indexCovers(p: string): boolean {
   const m = loadMeta()
   if (!m || !m.builtAt || !getSettings().indexEnabled) return false
-  return m.roots.some(r => under(p, r))
+  return m.covered.some(r => under(p, r))
 }
 
 // ---------------------------------------------------------------- metadata
@@ -147,9 +178,21 @@ function loadMeta(): IndexMeta | null {
   metaLoaded = true
   try {
     const j = JSON.parse(fs.readFileSync(metaPath(), 'utf8')) as IndexMeta
-    if (j && j.version === 1 && Array.isArray(j.roots)) meta = j
+    if (j && j.version === 2 && Array.isArray(j.roots) && Array.isArray(j.covered)) meta = j
   } catch { meta = null }
   return meta
+}
+
+/**
+ * Forget the on-disk index. Called when the db turns out to be unusable: the
+ * meta must stop claiming coverage the moment we know we cannot read the rows,
+ * or every search under those roots answers "no matches" from thin air.
+ */
+function invalidateMeta(why: string): void {
+  meta = null
+  metaLoaded = true
+  text = null
+  lastError = why
 }
 
 function dbBytes(): number {
@@ -161,7 +204,8 @@ export function getIndexStatus(): IndexStatus {
   const enabled = getSettings().indexEnabled
   const st: IndexStatus = {
     state: lastError ? 'error' : scan ? 'scanning' : !enabled ? 'off' : m?.builtAt ? 'ready' : 'idle',
-    roots: m?.roots ?? [],
+    // what searches may actually be answered from — never the wish list
+    roots: m?.covered ?? [],
     files: m?.files ?? 0,
     dirs: m?.dirs ?? 0,
     lastBuilt: m?.builtAt ?? 0,
@@ -198,6 +242,33 @@ function remotePrefixes(): string[] {
   return mountPoints().filter(mp => mp !== '/' && isRemotePath(mp))
 }
 
+type Timed<T> = { timedOut: true; value: null } | { timedOut: false; value: T }
+
+/**
+ * Race an fs call against a timer. `p` must never reject (callers .catch first),
+ * so the only two outcomes are a value and a timeout.
+ *
+ * IMPORTANT, and the reason the supervisor below exists: abandoning the promise
+ * does NOT free the libuv work request — the blocked readdir/lstat still pins
+ * its threadpool thread until the kernel gives up (never, on a `hard` mount).
+ * What this buys is that the scan stops QUEUEING more of them, notices
+ * cancellation, and can finish; fs/watch.ts's header says the same thing.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<Timed<T>> {
+  return new Promise(resolve => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; resolve({ timedOut: true, value: null }) }
+    }, ms)
+    void p.then(value => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ timedOut: false, value })
+    })
+  })
+}
+
 /** backpressure-aware write that never hangs when the stream dies mid-build */
 async function writeChunk(ws: fs.WriteStream, s: string): Promise<void> {
   if (ws.write(s)) return
@@ -208,6 +279,22 @@ async function writeChunk(ws: fs.WriteStream, s: string): Promise<void> {
     ws.once('error', bad)
     ws.once('close', bad)
   })
+}
+
+/**
+ * A build that finished but does not cover everything it was asked to. This is
+ * the only cue the user gets that a folder is missing from the index, so it
+ * names the folders and says what happens instead (IndexStatus.error, shown in
+ * Options ▸ Search).
+ */
+function incompleteBuildError(unreadable: string[], unresponsive: string[], capped: boolean): string {
+  const parts: string[] = []
+  if (unreadable.length) parts.push(`${unreadable.join(', ')} could not be read`)
+  if (unresponsive.length) parts.push(`${unresponsive.join(', ')} stopped responding`)
+  if (capped) parts.push(`the ${MAX_ENTRIES.toLocaleString()}-item limit was reached`)
+  if (!parts.length) return ''
+  return `The index is incomplete: ${parts.join('; ')}. `
+    + 'Searching those folders scans them directly instead.'
 }
 
 /**
@@ -229,6 +316,13 @@ async function runBuild(job: Scan): Promise<void> {
   let pending = `${MAGIC} ${Date.now()}\n`
   for (const r of roots) pending += `r\t${esc(r)}\n`
 
+  // a root only earns coverage by being walked to the end; everything else is
+  // reported instead of quietly pretending the index can answer for it
+  const covered: string[] = []
+  const unreadable: string[] = []
+  const unresponsive: string[] = []
+  let capped = false
+
   const ws = fs.createWriteStream(tmp)
   let wsError: Error | null = null
   ws.on('error', (e: Error) => { wsError = e })
@@ -241,20 +335,48 @@ async function runBuild(job: Scan): Promise<void> {
       const rootRemote = isRemotePath(root)
       const stack: string[] = [root]
       let sinceTick = 0
+      let rootOk = true
+      let timeouts = 0
+
+      /** returns true when this root is hopeless and must be abandoned */
+      const noteTimeout = (): boolean => {
+        rootOk = false
+        if (!unresponsive.includes(root)) unresponsive.push(root)
+        return ++timeouts >= MAX_TIMEOUTS_PER_ROOT
+      }
 
       while (stack.length && !job.cancelled && entries < MAX_ENTRIES) {
         const cur = stack.pop()!
-        let names: fs.Dirent[]
-        try {
-          names = await fsp.readdir(cur, { withFileTypes: true })
-        } catch { continue }          // unreadable: skip the whole subtree
+        const read = await withTimeout(
+          fsp.readdir(cur, { withFileTypes: true }).catch(() => null), IO_TIMEOUT_MS)
+        if (read.timedOut) {
+          // the mount stopped answering: drop this subtree, and once that has
+          // happened a few times stop feeding the dead server entirely
+          if (noteTimeout()) stack.length = 0
+          continue
+        }
+        const names = read.value
+        if (!names) {                 // unreadable: skip the whole subtree
+          if (cur === root) rootOk = false
+          continue
+        }
         dirs++
+        job.progress++
         pending += `d\t${esc(cur)}\n`
+        /** this root is unreachable: finish the current directory and stop */
+        let giveUp = false
 
         for (let i = 0; i < names.length && !job.cancelled; i += STAT_POOL) {
           const slice = names.slice(i, i + STAT_POOL)
-          const stats = await Promise.all(slice.map(d =>
-            fsp.lstat(path.join(cur, d.name)).catch(() => null)))
+          const batch = await withTimeout(Promise.all(slice.map(d =>
+            fsp.lstat(path.join(cur, d.name)).catch(() => null))), IO_TIMEOUT_MS)
+          if (batch.timedOut) {
+            // never queue the next 48 lstats behind a server that is not
+            // answering the current 48
+            giveUp = noteTimeout()
+            break
+          }
+          const stats = batch.value
           for (let k = 0; k < slice.length; k++) {
             const name = slice[k].name
             const st = stats[k]
@@ -268,14 +390,19 @@ async function runBuild(job: Scan): Promise<void> {
             if (isLink) {
               // resolve only to label it — symlinked dirs are never descended
               // into (that is the cycle guard), so this costs one stat each
-              const t = await fsp.stat(full).catch(() => null)
-              isDir = !!t?.isDirectory()
+              const t = await withTimeout(fsp.stat(full).catch(() => null), IO_TIMEOUT_MS)
+              if (t.timedOut) {
+                if (noteTimeout()) { giveUp = true; break }
+                continue
+              }
+              isDir = !!t.value?.isDirectory()
             }
             const flags = (isDir ? 'd' : 'f') + (isLink ? 'l' : '') + (hidden ? 'h' : '')
             const size = isDir ? -1 : st.size
             pending += `e\t${esc(name)}\t${flags}\t${size}\t${Math.round(st.mtimeMs)}\n`
             entries++
             job.seen++
+            job.progress++
             if (isDir) {
               if (isLink) continue
               if (SKIP_DIRS.has(full)) continue
@@ -285,14 +412,23 @@ async function runBuild(job: Scan): Promise<void> {
               files++
             }
           }
+          if (giveUp) break
           if (pending.length >= CHUNK_CHARS) {
             await writeChunk(ws, pending)
             pending = ''
           }
         }
+        // whatever this directory managed to yield is kept; the root just stops
+        if (giveUp) stack.length = 0
         if (pending.length >= CHUNK_CHARS) { await writeChunk(ws, pending); pending = '' }
         if (++sinceTick >= DIRS_PER_TICK) { sinceTick = 0; await tick() }
       }
+
+      if (job.cancelled) break
+      let cutOff = false
+      if (entries >= MAX_ENTRIES && stack.length) { capped = true; cutOff = true; rootOk = false }
+      if (rootOk) covered.push(root)
+      else if (!cutOff && !unresponsive.includes(root)) unreadable.push(root)
     }
 
     if (pending) await writeChunk(ws, pending)
@@ -303,12 +439,12 @@ async function runBuild(job: Scan): Promise<void> {
     if (job.cancelled) { await fsp.unlink(tmp).catch(() => {}); return }
 
     await fsp.rename(tmp, dbPath())
-    meta = { version: 1, builtAt: Date.now(), roots, files, dirs }
+    meta = { version: 2, builtAt: Date.now(), roots, covered, files, dirs }
     metaLoaded = true
     await fsp.writeFile(metaPath() + '.tmp', JSON.stringify(meta))
     await fsp.rename(metaPath() + '.tmp', metaPath())
     text = null                        // reloaded lazily on the next query
-    lastError = ''
+    lastError = incompleteBuildError(unreadable, unresponsive, capped)
   } catch (e) {
     try { ws.destroy() } catch { /* already gone */ }
     await fsp.unlink(tmp).catch(() => {})
@@ -320,7 +456,11 @@ async function runBuild(job: Scan): Promise<void> {
 export function buildIndex(): IndexStatus {
   if (scan) return getIndexStatus()
   lastError = ''
-  const job: Scan = { cancelled: false, root: '', seen: 0 }
+  // an explicit build is the user asking for one: it lifts a previous
+  // Clear/Cancel block, and it is the only thing that does
+  autoBuildBlocked = false
+  lastBuildAttempt = Date.now()
+  const job: Scan = { cancelled: false, root: '', seen: 0, progress: 0, lastProgress: -1, stallTicks: 0 }
   scan = job
   if (!statusTimer) statusTimer = setInterval(broadcast, STATUS_MS)
   void runBuild(job).finally(() => {
@@ -334,6 +474,8 @@ export function buildIndex(): IndexStatus {
 
 export function cancelIndex(): IndexStatus {
   if (scan) scan.cancelled = true
+  // "Cancel" that restarts itself a minute later is not a cancel
+  autoBuildBlocked = true
   return getIndexStatus()
 }
 
@@ -345,6 +487,9 @@ export async function clearIndex(): Promise<IndexStatus> {
   metaLoaded = true
   text = null
   lastError = ''
+  // "no meta" is also what "enabled but never built" looks like, so without
+  // this the supervisor rebuilds the index the user just deleted within 60s
+  autoBuildBlocked = true
   broadcast()
   return getIndexStatus()
 }
@@ -356,36 +501,52 @@ async function ensureLoaded(): Promise<boolean> {
   if (!loadMeta()?.builtAt) return false
   try {
     const t = await fsp.readFile(dbPath(), 'utf8')
-    if (!t.startsWith(MAGIC)) return false
+    if (!t.startsWith(MAGIC)) {
+      invalidateMeta('The search index file is damaged and was ignored. Rebuild it from Options ▸ Search.')
+      return false
+    }
     text = t
     return true
-  } catch { return false }
+  } catch (e) {
+    // db gone (deleted by hand / a cleanup tool that missed the meta file) or
+    // unreadable (EMFILE, ENOMEM). Either way the meta must stop claiming
+    // coverage — otherwise searches keep routing here and get zero results.
+    invalidateMeta(`The search index could not be read (${String((e as Error)?.message ?? e)}).`)
+    return false
+  }
 }
 
 /** drop the in-memory copy (indexing turned off / index cleared) */
 export function unload(): void { text = null }
 
+/**
+ * `flags` is this index's on-disk serialisation ('d'/'f' + 'l' symlink + 'h'
+ * hidden); everything past decoding it is shared with the FileFinder source, so
+ * the entry-building itself lives in fs/list.ts and both callers get the same
+ * FileEntry — including typeLabel and rating, which this used to drop.
+ */
 function entryFrom(dir: string, name: string, flags: string, size: number, mtime: number, remote: boolean): FileEntry {
-  const isDir = flags.charCodeAt(0) === 100 /* 'd' */
-  const full = dir === '/' ? '/' + name : dir + '/' + name
-  const mime = mimeForName(name, isDir)
-  const e: FileEntry = {
-    name,
-    path: full,
-    isDir,
-    isSymlink: flags.includes('l'),
-    size: isDir ? -1 : size,
+  return entryNoStat(dir, name, {
+    isDir: flags.charCodeAt(0) === 100 /* 'd' */,
+    size,
     mtime,
-    // the index stores one timestamp; ctime falls back to it (a stat would
-    // defeat the point of the index on a network share)
-    ctime: mtime,
-    mime,
-    icons: isDir ? folderIcons(full) : iconsForMime(mime),
     hidden: flags.includes('h'),
-    ext: isDir ? '' : path.extname(name).slice(1).toLowerCase(),
+    isSymlink: flags.includes('l'),
+    remote,
+  })
+}
+
+/** does any path segment BELOW root start with a dot (root's own name is not our business) */
+export function hiddenBelow(dir: string, root: string): boolean {
+  if (dir.length <= root.length) return false
+  const rel = dir.slice(root === '/' ? 1 : root.length + 1)
+  let start = 0
+  for (;;) {
+    if (rel.charCodeAt(start) === 46 /* . */) return true
+    const i = rel.indexOf('/', start)
+    if (i < 0) return false
+    start = i + 1
   }
-  if (remote) e.remote = true
-  return e
 }
 
 export interface IndexSearchOpts {
@@ -397,12 +558,17 @@ export interface IndexSearchOpts {
 
 /**
  * Name search straight out of the index — one linear scan, no stat() calls
- * (which is the whole point on a CIFS mount). Returns [] when the index cannot
- * answer, so callers can fall back to the live walker.
+ * (which is the whole point on a CIFS mount).
+ *
+ * Returns NULL when the index cannot answer (root not covered, db missing or
+ * unreadable) and an array — possibly empty — when it can. The distinction is
+ * the whole contract: an empty array means "searched, nothing matched", while
+ * null means "ask the live walker", and collapsing the two is what made a
+ * folder full of matches report "No items match your search".
  */
-export async function indexSearch(query: string, opts: IndexSearchOpts): Promise<FileEntry[]> {
-  if (!indexCovers(opts.root)) return []
-  if (!await ensureLoaded()) return []
+export async function indexSearch(query: string, opts: IndexSearchOpts): Promise<FileEntry[] | null> {
+  if (!indexCovers(opts.root)) return null
+  if (!await ensureLoaded()) return null
   const t = text!
   const match = nameMatcher(query)
   const limit = opts.limit ?? 10_000
@@ -412,6 +578,8 @@ export async function indexSearch(query: string, opts: IndexSearchOpts): Promise
   let curDir = ''
   let inScope = false
   let curRemote = false
+  /** the directory itself sits under a dot-folder (see the filter below) */
+  let curDirHidden = false
   let pos = 0
   while (pos < t.length && out.length < limit) {
     let nl = t.indexOf('\n', pos)
@@ -420,7 +588,10 @@ export async function indexSearch(query: string, opts: IndexSearchOpts): Promise
     if (tag === 100 /* d */) {
       curDir = unesc(t.slice(pos + 2, nl))
       inScope = opts.subfolders === false ? curDir === root : under(curDir, root)
-      if (inScope) curRemote = isRemotePath(curDir)
+      if (inScope) {
+        curRemote = isRemotePath(curDir)
+        curDirHidden = hiddenBelow(curDir, root)
+      }
     } else if (tag === 101 /* e */ && inScope) {
       const t1 = t.indexOf('\t', pos + 2)
       const t2 = t.indexOf('\t', t1 + 1)
@@ -429,7 +600,13 @@ export async function indexSearch(query: string, opts: IndexSearchOpts): Promise
         const raw = t.slice(pos + 2, t1)
         const name = raw.includes('\\') ? unesc(raw) : raw
         const flags = t.slice(t1 + 1, t2)
-        if ((opts.showHidden || !flags.includes('h')) && match(name)) {
+        // hiddenness is INHERITED: the live walker never descends into a dot
+        // directory (search.ts), so with indexHidden on a plain file inside
+        // ~/.mozilla — whose own name carries no 'h' — must not surface in an
+        // ordinary search either, or the same query answers differently
+        // depending on whether the index happens to cover the folder
+        const visible = opts.showHidden || (!curDirHidden && !flags.includes('h'))
+        if (visible && match(name)) {
           out.push(entryFrom(
             curDir, name, flags,
             Number(t.slice(t2 + 1, t3)), Number(t.slice(t3 + 1, nl)), curRemote,
@@ -454,19 +631,24 @@ function rootsDrifted(): boolean {
 /** kick a rebuild when the index is older than the configured interval */
 function refreshDue(): boolean {
   const s = getSettings()
-  if (!s.indexEnabled || scan) return false
+  if (!s.indexEnabled || scan || autoBuildBlocked) return false
+  if (s.indexRefreshMins <= 0) return false
   const m = loadMeta()
-  if (!m?.builtAt) return s.indexRefreshMins > 0    // enabled but never built
+  // Never built, or the last build failed/was abandoned: retry on the
+  // CONFIGURED interval. The old code returned true here on every tick, which
+  // turned a build that keeps failing (ENOSPC on ~/.local/state, a dead root)
+  // into a full recursive re-scan every 60 seconds for the life of the process
+  // — and ignored "Once a day" while doing it.
+  if (!m?.builtAt) return Date.now() - lastBuildAttempt >= s.indexRefreshMins * 60_000
   // a root added/removed while a scan was running lands on the next tick
   if (rootsDrifted()) return true
-  if (s.indexRefreshMins <= 0) return false
   return Date.now() - m.builtAt >= s.indexRefreshMins * 60_000
 }
 
 /** called after an index-backed search: quietly re-scan when clearly stale */
 export function refreshIfStale(): void {
   const s = getSettings()
-  if (!s.indexEnabled || scan || s.indexRefreshMins <= 0) return
+  if (!s.indexEnabled || scan || autoBuildBlocked || s.indexRefreshMins <= 0) return
   const m = loadMeta()
   if (!m?.builtAt) return
   const age = Date.now() - m.builtAt
@@ -481,16 +663,44 @@ export function applySettings(): IndexStatus {
     unload()
   } else if (rootsDrifted() && !scan) {
     // the indexed-folder list changed: re-scan now rather than at the next tick
+    // (an explicit edit of the roots also lifts a Clear/Cancel block)
     buildIndex()
   }
   broadcast()
   return getIndexStatus()
 }
 
+/**
+ * A scan that has made ZERO progress for two ticks is not slow, it is blocked
+ * in the kernel on a dead mount, and no flag we set can bring it back — the
+ * in-flight readdir/lstat owns its threadpool thread until the server answers.
+ * So the job is abandoned instead: the timer stops, `scan` goes back to null so
+ * later builds are not refused at the `if (scan)` guard for the rest of the
+ * session, and the orphan tidies up after itself if it ever returns (its
+ * `.finally` re-checks `scan === job`, and `cancelled` makes it drop its temp
+ * file rather than publish a half-built index).
+ */
+function superviseScan(job: Scan): void {
+  if (job.progress !== job.lastProgress) {
+    job.lastProgress = job.progress
+    job.stallTicks = 0
+    return
+  }
+  if (++job.stallTicks < STALL_TICKS) return
+  job.cancelled = true
+  lastError = `Indexing ${job.root || 'the selected folders'} stopped responding and was abandoned.`
+  if (scan === job) scan = null
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
+  broadcast()
+}
+
 // One low-frequency supervisor instead of a timer per setting change: it costs
 // nothing, survives settings edits made anywhere, and unref() keeps it from
 // holding the process open.
-const supervisor = setInterval(() => { if (refreshDue()) buildIndex() }, 60_000)
+const supervisor = setInterval(() => {
+  if (scan) { superviseScan(scan); return }
+  if (refreshDue()) buildIndex()
+}, SUPERVISOR_MS)
 supervisor.unref?.()
 
 // ---------------------------------------------------------------- ipc
@@ -501,7 +711,10 @@ ipcMain.handle(CH('getIndexStatus'), () => getIndexStatus())
 ipcMain.handle(CH('buildIndex'), () => buildIndex())
 ipcMain.handle(CH('cancelIndex'), () => cancelIndex())
 ipcMain.handle(CH('clearIndex'), () => clearIndex())
-ipcMain.handle(CH('indexSearch'), (_e, query: string, opts: IndexSearchOpts) => indexSearch(query, opts))
+// over IPC the "index cannot answer" signal collapses back to an empty list —
+// only the main-process caller (search.ts) can act on it by walking live
+ipcMain.handle(CH('indexSearch'), async (_e, query: string, opts: IndexSearchOpts) =>
+  (await indexSearch(query, opts)) ?? [])
 ipcMain.handle(CH('indexCovers'), (_e, p: string) => indexCovers(p))
 ipcMain.handle(CH('indexApplySettings'), () => applySettings())
 

@@ -8,6 +8,11 @@ import { mountProperties } from './properties'
 import { mountOpenWith } from './openwith'
 import { mountOptions } from './options'
 import { mountPassword } from './password'
+import { mountBulkRename } from './bulkrename'
+import { mountFolderIcon } from './foldericon'
+import { mountFixNames } from './fixnames'
+import { mountHistory } from './history'
+import { mountDuplicates } from './duplicates'
 
 export function mountDialogs(): void {
   mountOps()
@@ -17,6 +22,11 @@ export function mountDialogs(): void {
   mountOpenWith()
   mountOptions()
   mountPassword()
+  mountBulkRename()
+  mountFolderIcon()
+  mountFixNames()
+  mountHistory()
+  mountDuplicates()
 }
 
 // ---------------------------------------------------------------- modal stack

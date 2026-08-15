@@ -1,7 +1,6 @@
 # Dependencies / build output
 node_modules/
 dist/
-release/
 *.log
 .env*
 __pycache__/
@@ -13,3 +12,5 @@ docs/research/
 
 # esbuild scratch from ad-hoc test bundles
 /undefined/
+.testdata/
+release/

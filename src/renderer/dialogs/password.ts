@@ -33,18 +33,25 @@ function showNext(): void {
   if (r) buildDialog(r)
 }
 
-function buildDialog(r: PasswordRequest): void {
+interface PromptSpec {
+  archiveName: string
+  /** action word for the message ("extract it" / "test it") */
+  verb: string
+  /** >1 shows Explorer's "that password did not work" line */
+  attempt: number
+  /** omit to hide the "use for the other archives" checkbox */
+  applyAllLabel?: string
+  /** password === null means "skip / cancel" */
+  resolve(password: string | null, applyToAll: boolean): void
+}
+
+function buildPrompt(spec: PromptSpec): void {
   let resolved = false
   const send = (password: string | null, applyToAll: boolean): void => {
     if (resolved) return
     resolved = true
-    answered.add(keyOf(r))
-    if (answered.size > 500) answered.clear()
-    void liq.invoke('resolvePassword', {
-      opId: r.opId, reqId: r.reqId, password, applyToAll,
-    })
     modal.close()
-    showNext()
+    spec.resolve(password, applyToAll)
   }
 
   const modal = openModal({
@@ -60,7 +67,7 @@ function buildDialog(r: PasswordRequest): void {
 
   const body = el('div', 'dlg-body')
   body.appendChild(el('div', 'dlg-msg',
-    `"${midEllipsize(r.archiveName)}" is encrypted. Enter its password to extract it.`))
+    `"${midEllipsize(spec.archiveName)}" is encrypted. Enter its password to ${spec.verb}.`))
 
   const field = el('input', 'dlg-input pw-input')
   field.type = 'password'
@@ -70,15 +77,17 @@ function buildDialog(r: PasswordRequest): void {
   body.appendChild(field)
 
   // only shown after a wrong password, exactly like Explorer's retry
-  if (r.attempt > 1) {
+  if (spec.attempt > 1) {
     body.appendChild(el('div', 'dlg-error', 'That password did not work. Try again.'))
   }
 
-  const allRow = el('label', 'dlg-check')
   const allBox = el('input')
   allBox.type = 'checkbox'
-  allRow.append(allBox, el('span', undefined, 'Use this password for the other archives'))
-  body.appendChild(allRow)
+  if (spec.applyAllLabel) {
+    const allRow = el('label', 'dlg-check')
+    allRow.append(allBox, el('span', undefined, spec.applyAllLabel))
+    body.appendChild(allRow)
+  }
 
   const buttons = el('div', 'dlg-buttons')
   const okBtn = el('button', 'btn btn-primary', 'Unlock')
@@ -93,5 +102,34 @@ function buildDialog(r: PasswordRequest): void {
   buttons.append(okBtn, skipBtn)
 
   modal.dlg.append(titleRow, body, buttons)
-  field.focus()
+  // AFTER openModal's own requestAnimationFrame, which focuses .btn-primary
+  // (the Unlock button) and would otherwise steal focus a frame later —
+  // leaving the typed password to fall through to the global shortcut map,
+  // where Delete/Backspace/F2 act on the file view behind the modal.
+  requestAnimationFrame(() => { if (!modal.closed) field.focus() })
+}
+
+function buildDialog(r: PasswordRequest): void {
+  buildPrompt({
+    archiveName: r.archiveName,
+    verb: 'extract it',
+    attempt: r.attempt,
+    applyAllLabel: 'Use this password for the other archives',
+    resolve: (password, applyToAll) => {
+      answered.add(keyOf(r))
+      if (answered.size > 500) answered.clear()
+      void liq.invoke('resolvePassword', {
+        opId: r.opId, reqId: r.reqId, password, applyToAll,
+      })
+      showNext()
+    },
+  })
+}
+
+/** One-off prompt outside the op queue (e.g. "Test archive" on an encrypted
+ *  file). Resolves to null when the user skips or dismisses. */
+export function askArchivePassword(archiveName: string, attempt = 1): Promise<string | null> {
+  return new Promise(resolve => {
+    buildPrompt({ archiveName, verb: 'test it', attempt, resolve: pw => resolve(pw) })
+  })
 }

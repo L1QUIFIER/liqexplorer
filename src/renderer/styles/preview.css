@@ -1,0 +1,248 @@
+/* Preview pane (#sidepane) — right-hand column, mirrors #viewhost's surface.
+   Loaded AFTER base.css so the width/overflow rules here win over the
+   placeholder rule there (same specificity, later wins). */
+
+#sidepane-splitter {
+  width: 6px;
+  flex: none;
+  cursor: col-resize;
+  position: relative;
+}
+#sidepane-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-fluent);
+}
+#sidepane-splitter:hover::after,
+#sidepane-splitter.dragging::after { background: var(--accent-light); }
+
+#sidepane {
+  width: var(--sidepane-w, 320px);
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-content);
+  border-top: 1px solid var(--stroke);
+  border-left: 1px solid var(--stroke);
+  border-radius: var(--radius-lg) 0 0 0;
+}
+
+/* ---------------- body: the type-specific preview, scrolls ---------------- */
+
+.pv-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Explorer centres a short preview in the pane; `safe` keeps overflowing
+     content (long text, archive listings) scrollable from the top */
+  justify-content: safe center;
+  gap: 8px;
+  padding: 12px;
+}
+
+.pv-stage {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* the PDF viewer wants every pixel it can get */
+.pv-stage-fill { flex: 1 1 auto; align-self: stretch; }
+
+.pv-img,
+.pv-thumb {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  /* a checkerboard behind transparency, like Explorer's image preview */
+  background-color: var(--bg-subtle);
+  background-image:
+    linear-gradient(45deg, var(--bg-hover) 25%, transparent 25%, transparent 75%, var(--bg-hover) 75%),
+    linear-gradient(45deg, var(--bg-hover) 25%, transparent 25%, transparent 75%, var(--bg-hover) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+}
+.pv-thumb { max-height: 40vh; }
+
+.pv-icon {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  margin: 16px 0 4px;
+}
+
+.pv-video {
+  max-width: 100%;
+  max-height: 60vh;
+  background: #000;
+  border-radius: var(--radius);
+}
+
+.pv-audio { width: 100%; height: 34px; flex: none; }
+
+.pv-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+.pv-cover {
+  max-width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+}
+
+.pv-tags { width: 100%; text-align: center; }
+.pv-tag-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.pv-tag-sub {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pv-pdf {
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: var(--bg-window);
+}
+
+/* ---------------- text ---------------- */
+
+.pv-text {
+  width: 100%;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 8px 10px;
+  font-family: 'Cascadia Mono', 'Consolas', 'DejaVu Sans Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  user-select: text;
+  cursor: text;
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+}
+
+/* ---------------- archive listing ---------------- */
+
+.pv-arch {
+  width: 100%;
+  flex: 1 1 auto;
+  --sb-size: 12px;
+  --sb-inset: 4px;
+  --sb-inset-hover: 2px;
+  --sb-btn-h: 0px;
+}
+.pv-arch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  font-size: var(--fs-caption);
+}
+.pv-arch-row.is-dir,
+.pv-arch-up { cursor: default; }
+.pv-arch-row.is-dir:hover,
+.pv-arch-up:hover { background: var(--bg-hover); }
+.pv-arch-icon { width: 16px; height: 16px; flex: none; object-fit: contain; }
+.pv-arch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-arch-size {
+  flex: none;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.pv-arch-status { padding: 4px 6px; font-size: var(--fs-caption); }
+
+/* ---------------- misc ---------------- */
+
+.pv-multi {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  margin: 16px 0 4px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  border: 1px solid var(--stroke);
+  font-size: 32px;
+  color: var(--text-secondary);
+}
+
+.pv-note {
+  width: 100%;
+  text-align: center;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.pv-dim { color: var(--text-disabled); text-align: left; }
+
+.pv-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: var(--bg-layer);
+  font-size: var(--fs-caption);
+}
+.pv-btn:hover { background: var(--bg-hover); }
+.pv-btn:active { background: var(--bg-press); }
+
+/* ---------------- caption ---------------- */
+
+.pv-caption {
+  flex: none;
+  padding: 8px 12px;
+  border-top: 1px solid var(--divider);
+  background: var(--bg-layer);
+}
+.pv-name {
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-meta {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the command bar's preview button, once wired */
+#commandbar .cb-preview.active { background: var(--bg-active); }

@@ -1,0 +1,177 @@
+/* Peek popover (rendered by src/renderer/views/peek.ts).
+   Injected by the module itself, so index.html carries no <link> for it.
+   Surface metrics follow the flyout tier in menus.css: flyout background,
+   8px radius, flyout shadow — a peek is a flyout that happens to hold a
+   preview. Its BOX IS FIXED (--pk-w / --pk-h): content lands asynchronously
+   and a popover that resizes as thumbnails arrive is impossible to aim at. */
+
+#peek-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 290;          /* under menus (300) and dialogs, over the views */
+  pointer-events: none;  /* only the popover itself takes the pointer */
+}
+
+.pk {
+  --pk-w: 460px;
+  --pk-h: 420px;
+
+  position: fixed;
+  width: var(--pk-w);
+  height: var(--pk-h);
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  /* floats over the file list with no scrim — see --bg-float in tokens.css */
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  overflow: hidden;
+  outline: none;
+  animation: liq-peek-in 110ms var(--ease-fluent);
+}
+
+@keyframes liq-peek-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---------------- header: icon + name + metadata ---------------- */
+
+.pk-head {
+  flex: none;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--bg-layer);
+}
+.pk-head-icon {
+  grid-row: 1 / span 2;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.pk-name {
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pk-meta {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 15px;
+}
+
+/* ---------------- body: preview or grid, scrolls ---------------- */
+
+.pk-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: safe center;
+  gap: 8px;
+  padding: 10px;
+  /* compact scrollbar tier, as menus use */
+  --sb-size: 12px;
+  --sb-inset: 4px;
+  --sb-inset-hover: 2px;
+  --sb-btn-h: 0px;
+}
+/* a grid fills from the top; only a single preview is centred */
+.pk-body-grid { justify-content: flex-start; align-items: stretch; }
+
+/* the shared preview renderers (pv-*) size themselves against the viewport,
+   which is far too big for a 420px box — clamp them to the popover */
+.pk .pv-img,
+.pk .pv-thumb,
+.pk .pv-video,
+.pk .pv-cover { max-height: 300px; }
+.pk .pv-icon { width: 64px; height: 64px; margin: 8px 0 2px; }
+.pk .pv-text { font-size: 11.5px; max-height: none; }
+.pk .pv-pdf { min-height: 300px; }
+.pk .pv-stage { width: 100%; }
+
+/* ---------------- folder grid ---------------- */
+
+.pk-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 4px;
+  align-content: start;
+}
+
+.pk-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border-radius: var(--radius);
+  cursor: default;
+  border: 1px solid transparent;
+}
+.pk-tile:hover { background: var(--bg-hover); }
+.pk-tile.is-active {
+  background: var(--bg-selected);
+  border-color: var(--selected-stroke);
+}
+
+.pk-thumb {
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pk-thumb img {
+  max-width: 72px;
+  max-height: 72px;
+  object-fit: contain;
+}
+
+.pk-tile-name {
+  width: 100%;
+  font-size: var(--fs-caption);
+  line-height: 1.25;
+  text-align: center;
+  /* two lines then ellipsis, like the icon views */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------- footer hint ---------------- */
+
+.pk-foot {
+  flex: none;
+  padding: 5px 12px;
+  border-top: 1px solid var(--divider);
+  background: var(--bg-layer);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

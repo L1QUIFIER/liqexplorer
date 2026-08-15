@@ -14,7 +14,7 @@ const METHODS = [
   'openTerminalAt', 'showProperties', 'getProperties',
   'startSearch', 'cancelSearch',
   'getViewState', 'setViewState', 'applyViewStateToAll',
-  'getSettings', 'setSettings', 'getTheme', 'getCapabilities',
+  'getSettings', 'setSettings', 'getTheme',
   'newWindow', 'windowControl', 'isMaximized', 'startNativeDrag', 'archiveList',
 ] as const
 

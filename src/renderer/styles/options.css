@@ -131,3 +131,47 @@
   line-height: 1;
 }
 .opt-list-x:hover { background: var(--bg-active); color: var(--text-primary); }
+
+/* smart view rules */
+.opt-inline { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.opt-rule-label { width: 120px; flex: none; color: var(--text-secondary); }
+.opt-rules { margin-top: 4px; }
+.is-off { opacity: 0.45; pointer-events: none; }
+
+/* safe-mode item-count row: indented under its parent checkbox */
+.opt-check.opt-indent {
+  margin-left: 22px;
+  gap: 6px;
+  align-items: center;
+  cursor: default;
+}
+/* the label either side of the number input must not wrap: as flex items they
+   were breaking mid-phrase around the box ("...moving more / than [100] items
+   at once (0 = / never)"), which reads as three unrelated fragments */
+.opt-check.opt-indent > span { white-space: nowrap; }
+.opt-num {
+  /* same chrome as .opt-select — --bg-input and --stroke-control do not exist,
+     so the box was rendering as bare text sitting in a gap */
+  width: 68px;
+  height: 28px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+  background: var(--bg-content);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+}
+.opt-num:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.opt-disabled { opacity: 0.5; }
+.opt-btn { margin-top: 6px; align-self: flex-start; }
+
+/* explanatory line under a settings row — for a default that will otherwise
+   look like something is missing */
+.opt-hint {
+  margin: -2px 0 6px 22px;
+  max-width: 44ch;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.35;
+}

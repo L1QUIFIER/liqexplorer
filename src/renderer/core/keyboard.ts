@@ -6,8 +6,18 @@
 // so they fall through untouched when focus is inside #viewhost (or anywhere
 // else). While an input/textarea/contenteditable has focus, nothing global
 // runs: editors own their keys, including Escape.
+//
+// Dual pane keys (Krusader / Total Commander muscle memory):
+//   F3            toggle the split          (Nemo and Dolphin both use F3)
+//   Ctrl+Shift+D  same, for anyone who wants a chord
+//   Tab           move focus to the other pane (only from inside a pane)
+//   F5 / F6       copy / move the selection to the other pane WHILE SPLIT;
+//                 with one pane F5 keeps its Explorer meaning (refresh), and
+//                 Shift+F5 refreshes either way
+//   Ctrl+U        swap what the two panes show
 import { app, liq } from './app'
 import { actions } from './actions'
+import { canTransferToOtherPane } from '../views/panes'
 import type { ViewMode } from '../../shared/types'
 
 /** Canonical Win11 order: Ctrl+Shift+1..8 */
@@ -40,6 +50,7 @@ export function mountKeyboard(): void {
       }
       if (k === 'c') { void actions.copyPath(); done(); return }
       if (k === 'e') { app.emit('nav-expand-to-current'); done(); return }
+      if (k === 'd') { app.emit('toggle-dual-pane'); done(); return }
       if (k === 'tab') { cycleTab(-1); done(); return }
       // Ctrl+Shift+T (reopen closed tab): intentionally not implemented
       return
@@ -67,6 +78,7 @@ export function mountKeyboard(): void {
         case 'f': app.emit('focus-search'); done(); return
         case 'r': actions.refresh(); done(); return
         case 'd': void actions.delete(); done(); return
+        case 'u': if (app.isSplit) { app.emit('swap-panes'); done() } return
         case 'tab': cycleTab(1); done(); return
       }
       return
@@ -80,6 +92,10 @@ export function mountKeyboard(): void {
         case 'arrowup': t.up(); done(); return
         case 'd': app.emit('edit-address'); done(); return
         case 'enter': void actions.properties(); done(); return
+        // Alt+P opens the pane on whichever tab was last used; Alt+Shift+P
+        // opens it on Details. One pane with tabs, so these are not two
+        // competing surfaces — Shift just says which tab you meant.
+        case 'p': app.emit(shift ? 'toggle-details-pane' : 'toggle-preview-pane'); done(); return
       }
       return
     }
@@ -88,10 +104,30 @@ export function mountKeyboard(): void {
 
     // ---- unmodified / shift-only keys ----
     switch (k) {
+      case 'tab': {
+        // Krusader's pane switch. Only from inside a pane, so Tab still walks
+        // the chrome normally everywhere else; the `editing` guard above has
+        // already let the address bar, search box and inline rename keep it.
+        if (!app.isSplit) return
+        if (!target?.closest('.pn-pane')) return
+        app.emit('pane-focus-toggle')
+        done(); return
+      }
       case 'f2': actions.rename(); done(); return
-      case 'f3': app.emit('focus-search'); done(); return
+      // F3 is the dual-pane toggle (Nemo and Dolphin both use it, and it is
+      // where a Krusader/TC user reaches). Focus-search keeps Ctrl+F and
+      // Ctrl+E, the two bindings anyone actually types for it.
+      case 'f3': app.emit('toggle-dual-pane'); done(); return
       case 'f4': app.emit('edit-address'); done(); return
-      case 'f5': actions.refresh(); done(); return
+      case 'f5':
+        // Krusader's copy-to-other-panel when that is meaningful; otherwise
+        // (one pane, nothing selected, virtual pane) Explorer's refresh, so F5
+        // never becomes a key that does nothing. Shift+F5 always refreshes.
+        if (!shift && canTransferToOtherPane()) { app.emit('pane-copy-to-other'); done(); return }
+        actions.refresh(); done(); return
+      case 'f6':
+        if (canTransferToOtherPane()) { app.emit('pane-move-to-other'); done() }
+        return
       case 'f10': if (shift) { app.emit('context-menu-key'); done() } return
       case 'contextmenu': app.emit('context-menu-key'); done(); return
       case 'delete': void actions.delete(undefined, shift); done(); return

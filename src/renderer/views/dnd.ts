@@ -4,10 +4,11 @@
 // (mapped through liq.pathForFile / webUtils) and text/uri-list file:// lines.
 // Semantics: internal = move unless Ctrl (copy); external = copy. Never drop a
 // folder onto itself or a descendant.
-import { liq, type Tab } from '../core/app'
+import { app, liq, type Tab } from '../core/app'
 import type { FileEntry } from '../../shared/types'
 import { dirname, iconURL } from './items'
 import { defaultDragEffect } from './rightdrag'
+import { transferWithConfirm } from '../core/confirmmove'
 
 export interface DnDHost {
   scroller: HTMLElement
@@ -185,6 +186,9 @@ export function wireDnD(host: DnDHost): void {
     let filtered = sources.filter(s => dest !== s && !dest.startsWith(s + '/'))
     if (kind === 'move') filtered = filtered.filter(s => dirname(s) !== dest)
     else if (!folder && !internal && kind === 'copy') filtered = filtered.filter(s => dirname(s) !== dest)
-    if (filtered.length) void liq.startOp({ kind, sources: filtered, dest })
+    if (!filtered.length) return
+    // opt-in guard against the stray drag that silently moves a folder, plus
+    // safe mode's check for the drop that was clearly not intended
+    transferWithConfirm(kind, filtered, dest, app.settings.confirmDrop)
   })
 }

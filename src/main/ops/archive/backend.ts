@@ -141,7 +141,14 @@ export async function availability(): Promise<{ sevenZip: boolean; unrar: boolea
 
 // ---------------- process plumbing ----------------
 
-interface RunResult { code: number; out: string; err: string; spawnFailed: boolean }
+interface RunResult {
+  code: number
+  out: string
+  err: string
+  spawnFailed: boolean
+  /** stdout hit capOut and the rest was dropped — `out` is a PREFIX, not the output */
+  truncated: boolean
+}
 
 interface RunOpts extends ChildSink {
   onOut?: (chunk: string) => void
@@ -159,18 +166,23 @@ function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<RunResult
     try {
       child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
-      resolve({ code: -1, out: '', err: describeSpawnError(cmd, e), spawnFailed: true })
+      resolve({ code: -1, out: '', err: describeSpawnError(cmd, e), spawnFailed: true, truncated: false })
       return
     }
     opts.onChild?.(child)
     const cap = opts.capOut ?? 1 << 20
     let out = ''
     let err = ''
+    // Dropping stdout SILENTLY is only safe for progress streams. Anything the
+    // caller parses (a listing) must know the capture was cut short, or it
+    // parses a prefix and believes it has the whole archive.
+    let truncated = false
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', (d: string) => {
       opts.onOut?.(d)
       if (out.length < cap) out += d
+      else truncated = true
     })
     child.stderr?.on('data', (d: string) => { if (err.length < (1 << 18)) err += d })
     let settled = false
@@ -180,8 +192,8 @@ function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<RunResult
       opts.onChild?.(null)
       resolve(r)
     }
-    child.on('error', e => done({ code: -1, out, err: describeSpawnError(cmd, e), spawnFailed: true }))
-    child.on('close', code => done({ code: code ?? -1, out, err, spawnFailed: false }))
+    child.on('error', e => done({ code: -1, out, err: describeSpawnError(cmd, e), spawnFailed: true, truncated }))
+    child.on('close', code => done({ code: code ?? -1, out, err, spawnFailed: false, truncated }))
   })
 }
 
@@ -205,13 +217,48 @@ const NOISE_RE = new RegExp([
 
 /** Last few meaningful lines of tool output — the user-facing error surface. */
 export function toolError(r: { out: string; err: string; code: number }, fallback: string): string {
-  const lines = (r.err + '\n' + r.out)
+  // only the tail is ever used, and `out` can be a multi-megabyte listing —
+  // splitting all of it into lines would cost far more than the message is worth
+  const lines = (r.err + '\n' + r.out).slice(-(1 << 16))
     .split(/[\r\n\b]+/)
     .map(l => l.trim())
     .filter(l => l.length > 0 && !NOISE_RE.test(l))
   const errs = lines.filter(l => /error|cannot|unsupported|unavailable|corrupt|damaged|unexpected|not implemented|checksum|crc failed|wrong password/i.test(l))
   const pick = (errs.length ? errs : lines).slice(-2).join(' ').replace(/\s+/g, ' ').slice(0, 300)
-  return pick || `${fallback} (exit code ${r.code})`
+  return humanize(pick) || `${fallback} (exit code ${r.code})`
+}
+
+/**
+ * 7z/unrar speak to programmers ("ERROR: CRC Failed : data.txt"). The failure
+ * list in the progress card is read by a person deciding what to do next, so
+ * the common cases get a sentence that says what is wrong AND what it means.
+ * Anything unrecognised is passed through rather than hidden.
+ */
+function humanize(msg: string): string {
+  const m = msg.replace(/^ERRORS?:\s*/i, '').trim()
+  const crc = /CRC Failed(?:\s*:\s*(.+?))?\s*$/i.exec(m)
+  if (crc) {
+    const who = crc[1] ? `"${crc[1].trim()}"` : 'A file'
+    return `${who} is damaged — the contents do not match the archive's checksum. `
+      + 'The archive is corrupted or was not downloaded completely.'
+  }
+  if (/Unexpected end of (archive|data)/i.test(m)) {
+    return 'The archive is incomplete — it ends sooner than it should. '
+      + 'If it came in several parts, make sure every part is present.'
+  }
+  if (/Wrong password|Data error in encrypted file/i.test(m)) return 'The password is incorrect.'
+  if (/Cannot open (the )?file as \[?\w*\]? ?archive/i.test(m)) {
+    return 'This file is not a readable archive, or its format is not supported.'
+  }
+  if (/There (is|are) no files|Empty archive/i.test(m)) return 'The archive is empty.'
+  if (/No space left|not enough space/i.test(m)) return 'There is not enough free space to extract this archive.'
+  if (/Can ?not open output file|Access is denied|Permission denied/i.test(m)) {
+    return 'The destination folder cannot be written to.'
+  }
+  if (/Unsupported (method|compression)/i.test(m)) {
+    return 'The archive uses a compression method this system cannot read.'
+  }
+  return m
 }
 
 /**
@@ -354,6 +401,28 @@ const EMPTY_LISTING: ArchiveListing = {
 }
 
 /**
+ * Capture ceiling for a LISTING, well above run()'s 1 MB progress default.
+ * A `7z l -slt` block is ~250-350 bytes per member, so this covers roughly a
+ * quarter of a million members.
+ *
+ * Why it matters that this is checked rather than just raised: EVERY guard
+ * downstream is computed from the parsed entries — bombCheck() sums their
+ * sizes, setTotals() derives the progress/ETA from them, unsafeMembers() and
+ * the archive:// browser read them. A prefix of the member list is not a safe
+ * input to any of those: with the old 1 MB default a 3.1 MB zip holding 4,000
+ * padding files followed by a 2 GB zero file listed as 3,455 entries totalling
+ * 10 KB, so the bomb guard passed and the extraction wrote 2 GB. Past this cap
+ * the archive is REFUSED, never listed partially.
+ */
+const LIST_CAP = 64 << 20
+
+const tooManyItems = (archivePath: string): ArchiveListing => ({
+  ...EMPTY_LISTING,
+  error: `The list of items in "${path.basename(archivePath)}" is too large to read completely, `
+    + 'so the archive cannot be checked for safety. It was not opened.',
+})
+
+/**
  * Structured listing. `headerEncrypted` means we could not even read the table
  * of contents — the caller must supply a password and list again.
  */
@@ -361,7 +430,9 @@ export async function list(archivePath: string, opts: ListOpts = {}): Promise<Ar
   const sz = await sevenZip()
   let firstError = ''
   if (sz) {
-    const r = await run(sz, ['l', '-slt', pFlag(opts.password), '--', archivePath], { onChild: opts.onChild })
+    const r = await run(sz, ['l', '-slt', pFlag(opts.password), '--', archivePath],
+      { onChild: opts.onChild, capOut: LIST_CAP })
+    if (r.truncated) return tooManyItems(archivePath)
     const text = r.out + '\n' + r.err
     if (r.code === 0 && !/^ERRORS?:/m.test(text)) {
       const parsed = parseSlt(r.out)
@@ -387,7 +458,8 @@ export async function list(archivePath: string, opts: ListOpts = {}): Promise<Ar
     const args = ['-j']
     if (opts.password) args.push('-p', opts.password)
     args.push(archivePath)
-    const r = await run(ls, args, { onChild: opts.onChild })
+    const r = await run(ls, args, { onChild: opts.onChild, capOut: LIST_CAP })
+    if (r.truncated) return tooManyItems(archivePath)
     if (r.code === 0) {
       const parsed = parseLsar(r.out)
       if (parsed) {

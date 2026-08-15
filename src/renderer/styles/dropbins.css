@@ -1,0 +1,371 @@
+/* DROP BINS — the drag-target dock in the bottom-right corner of the file view.
+   Loaded by views/dropbins.ts injecting its own <link> into <head>, so
+   index.html needs no edit. Everything is scoped under #db-dock / .db-*.
+
+   Vertical position is set from script (--db-bottom) so the dock rides above
+   the status bar and steps up over the ops flyout while a copy is running. */
+
+#db-dock {
+  position: fixed;
+  right: 16px;
+  bottom: var(--db-bottom, 44px);
+  z-index: 95;                 /* over #ops-flyout (90), under menus/dialogs (100) */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;        /* only the real controls take the pointer */
+  transition: bottom var(--dur-mid) var(--ease-fluent);
+}
+/* Dragged somewhere by the user: anchored top-left instead, and the bottom
+   transition is off — animating the property being dragged lags the pointer. */
+#db-dock.db-free {
+  right: auto;
+  bottom: auto;
+  transition: none;
+}
+/* In the top half of the window the tray must grow DOWNWARD from the pill,
+   and on the left it must align left, or it opens off-screen. */
+#db-dock.db-flip-y { flex-direction: column-reverse; }
+#db-dock.db-flip-x { align-items: flex-start; }
+#db-dock.db-flip-y .db-tray,
+#db-dock.db-flip-y .db-stack { transform-origin: top right; }
+#db-dock.db-flip-x .db-tray,
+#db-dock.db-flip-x .db-stack { transform-origin: bottom left; }
+#db-dock.db-flip-x.db-flip-y .db-tray,
+#db-dock.db-flip-x.db-flip-y .db-stack { transform-origin: top left; }
+#db-dock.db-moving { cursor: grabbing; }
+.db-head { cursor: grab; }
+.db-head:active { cursor: grabbing; }
+#db-dock > * { pointer-events: auto; }
+
+/* ------------------------------------------------------------- collapsed pill */
+
+.db-pill {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast) var(--ease-fluent),
+              width var(--dur-mid) var(--ease-fluent);
+}
+.db-pill:hover { background: var(--bg-hover-strong); }
+.db-pill:active { background: var(--bg-press); }
+#db-dock[data-open="true"] .db-pill { width: 100px; border-radius: 20px; }
+.db-pill-text {
+  display: none;
+  margin-left: 6px;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+#db-dock[data-open="true"] .db-pill-text { display: inline; }
+
+/* count badge — the Stack's contents, visible even when collapsed */
+.db-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-selection);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.db-pill .db-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2px var(--bg-flyout);
+}
+.db-badge[hidden] { display: none !important; }
+
+/* ------------------------------------------------------------------- the tray */
+
+.db-tray {
+  width: 232px;
+  max-height: calc(100vh - 200px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  overflow: hidden;
+  transform-origin: bottom right;
+  animation: db-pop var(--dur-mid) var(--ease-fluent);
+}
+@keyframes db-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+.db-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px 8px 12px;
+  border-bottom: 1px solid var(--divider);
+  flex: none;
+}
+.db-head-title {
+  flex: 1;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.db-ibtn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.db-ibtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.db-ibtn:active { background: var(--bg-press); }
+.db-ibtn.on { background: var(--bg-active); color: var(--accent); }
+
+.db-tiles {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+  --sb-size: 10px;
+  --sb-inset: 3px;
+  --sb-inset-hover: 2px;
+  --sb-btn-h: 0;
+}
+
+/* ------------------------------------------------------------------- one bin */
+
+.db-tile {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  border: 1px dashed transparent;
+  text-align: left;
+  color: var(--text-primary);
+}
+.db-tile:hover { background: var(--bg-hover); }
+.db-tile:active { background: var(--bg-press); }
+/* a drag is hovering this bin */
+.db-tile.db-over {
+  background: var(--bg-selected);
+  border-color: var(--accent-selection);
+}
+:root[data-theme="dark"] .db-tile.db-over { background: var(--bg-selected); }
+/* the bin just ran — a one-shot flash instead of yet another dialog */
+.db-tile.db-flash { animation: db-flash 620ms var(--ease-fluent); }
+@keyframes db-flash {
+  0%   { background: var(--accent-selection); }
+  100% { background: transparent; }
+}
+.db-tile.db-open { background: var(--bg-active); }
+
+.db-ico {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.db-tile.db-danger .db-ico { color: var(--danger); }
+.db-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+
+.db-text { flex: 1; min-width: 0; }
+.db-label {
+  display: block;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;              /* keep the tail of a long path visible */
+  text-align: left;
+}
+
+/* --------------------------------------------------------------- stack panel */
+
+.db-stack {
+  width: 300px;
+  max-height: calc(100vh - 220px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  overflow: hidden;
+  animation: db-pop var(--dur-mid) var(--ease-fluent);
+}
+.db-stack-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+  --sb-size: 10px;
+  --sb-inset: 3px;
+  --sb-inset-hover: 2px;
+  --sb-btn-h: 0;
+}
+.db-srow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+.db-srow:hover { background: var(--bg-hover); }
+.db-srow img { flex: none; }
+.db-srow-text { flex: 1; min-width: 0; }
+.db-srow-name {
+  display: block;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-srow-dir {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.db-srow.db-missing .db-srow-name { color: var(--text-disabled); text-decoration: line-through; }
+.db-srow-x {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+.db-srow:hover .db-srow-x { opacity: 1; }
+.db-srow-x:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.db-empty {
+  padding: 22px 16px;
+  text-align: center;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.db-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--divider);
+}
+.db-foot-spacer { flex: 1; }
+
+/* ------------------------------------------------------------------- toasts */
+
+/* the id keeps this ahead of `#db-dock > *`, which re-enables the pointer */
+#db-dock .db-toasts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+.db-toast {
+  pointer-events: auto;
+  max-width: 320px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-flyout);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-flyout);
+  font-size: var(--fs-caption);
+  animation: db-pop var(--dur-mid) var(--ease-fluent);
+}
+.db-toast.db-toast-out { opacity: 0; transition: opacity var(--dur-mid) var(--ease-fluent); }
+.db-toast-text { flex: 1; min-width: 0; line-height: 1.35; }
+.db-toast-sub { display: block; color: var(--text-secondary); }
+.db-toast.db-toast-bad { border-color: var(--danger); }
+
+/* ------------------------------------------ dialogs owned by this feature */
+
+.db-cfg-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.db-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--radius);
+}
+.db-cfg-row:hover { background: var(--bg-hover); }
+.db-cfg-row.db-off .db-cfg-name { color: var(--text-disabled); }
+.db-cfg-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-cfg-sub { font-size: 11px; color: var(--text-secondary); }
+.db-cfg-btns { display: flex; gap: 2px; }
+.db-cfg-edit { display: flex; flex-direction: column; gap: 10px; }
+.db-field { display: flex; align-items: center; gap: 8px; }
+.db-field > label { width: 108px; flex: none; color: var(--text-secondary); font-size: var(--fs-caption); }
+.db-field > .opt-input, .db-field > .opt-select { flex: 1; min-width: 0; }
+.db-out {
+  width: 100%;
+  height: 220px;
+  font-family: ui-monospace, 'Cascadia Mono', 'DejaVu Sans Mono', monospace;
+  font-size: 12px;
+  resize: none;
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  padding: 8px;
+  white-space: pre;
+  overflow: auto;
+}
+.db-prog {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.db-prog-fill {
+  height: 100%;
+  background: var(--accent-selection);
+  border-radius: 2px;
+  transition: width var(--dur-fast) linear;
+}

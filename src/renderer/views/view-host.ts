@@ -18,15 +18,32 @@ import { createDetailsHeader, HEADER_H, normalizedColumns, detailsTotalWidth } f
 import { Renamer } from './rename'
 import { wireDnD } from './dnd'
 import { initRightDrag } from './rightdrag'
+// side-effect import too: views/peek.ts installs its own layer, stylesheet and
+// document-level keys (Space / Escape) the moment it is imported
+import { attachPeek } from './peek'
+import { applyRating, mountRatingBar } from './ratings'
 
 const OVERSCAN = 10
+/** sideways overscan in pixels: one column's worth either side, so a horizontal
+ *  scroll lands on painted items rather than on empty space */
+const OVERSCAN_PX = 320
 const POOL_MAX = 120
 const EDGE_BAND = 12
 
 const SPINNER =
   '<svg class="vh-spinner" viewBox="0 0 48 48"><circle cx="24" cy="24" r="20"/></svg>'
 
-export function mountViewHost(root: HTMLElement): void {
+export interface ViewHostOpts {
+  /** Which Tab this host renders. Defaults to the focused pane (app.activeTab),
+   *  which is what a single-pane window wants. views/panes.ts passes a fixed
+   *  pane accessor so two hosts can be mounted side by side. */
+  getTab?: () => Tab | null
+  /** Called when the pointer/keyboard lands in this host, so the owning pane
+   *  can take focus before anything reads app.activeTab. */
+  onActivate?: () => void
+}
+
+export function mountViewHost(root: HTMLElement, opts: ViewHostOpts = {}): void {
   root.innerHTML = ''
   root.classList.add('vh-root')
 
@@ -42,6 +59,12 @@ export function mountViewHost(root: HTMLElement): void {
   const stateEl = document.createElement('div')
   stateEl.className = 'vh-state'
   stateEl.hidden = true
+  // Above the results, Explorer-style: says how the answer was produced when
+  // that changes what it means — capped, or served from a stale snapshot.
+  const bannerEl = document.createElement('div')
+  bannerEl.className = 'vh-searchbar'
+  bannerEl.hidden = true
+  root.appendChild(bannerEl)
   root.appendChild(scroller)
   root.appendChild(stateEl)
 
@@ -66,13 +89,26 @@ export function mountViewHost(root: HTMLElement): void {
   let cutSet = new Set<string>()
   let toastTimer = 0
 
-  const tab = (): Tab | null => app.activeTab ?? null
+  const getTab = opts.getTab
+  const tab = (): Tab | null => (getTab ? getTab() : app.activeTab) ?? null
+  /** true when THIS host is the focused pane — global commands (rename, the
+   *  context-menu key) must only ever hit one of the two views */
+  const isFocusedPane = (): boolean => {
+    const t = tab()
+    return !!t && t === app.activeTab
+  }
+
+  // the strip that shows an active rating filter; it owns its own repaint.
+  // Mounted after `tab` exists — it paints once synchronously.
+  mountRatingBar(root, tab)
 
   // ---------- details header ----------
   const header = createDetailsHeader({
     tab: () => tab(),
     checkboxes: () => app.settings.checkboxes,
     searchMode: () => (tab()?.searchQuery ?? null) !== null,
+    // the same array the rows are drawn with, injected extras and all
+    effectiveCols: () => detailCols,
     showExt: () => app.settings.showExtensions,
     sampleEntries: () => {
       const L = layout
@@ -163,7 +199,17 @@ export function mountViewHost(root: HTMLElement): void {
         label: COLUMN_LABELS[c.key] ?? c.key,
         right: c.key === 'size',
       }))
-      if (searchMode) detailCols.splice(1, 0, { key: 'folderPath', width: 240, label: 'Folder path' })
+      if (searchMode) detailCols.splice(1, 0, { key: 'folderPath', width: 240, label: 'Folder path', synthetic: true })
+      // The Recycle Bin's two extra columns, the same way search adds its own:
+      // injected rather than stored, because they mean nothing anywhere else
+      // and would otherwise persist into the next folder the user opens. The
+      // data is already on the entry (trashOrigPath / trashDeletedAt from the
+      // .trashinfo files) and items.ts already renders both keys.
+      if (t.path === 'trash://') {
+        detailCols.splice(1, 0,
+          { key: 'origPath', width: 260, label: COLUMN_LABELS.origPath, synthetic: true },
+          { key: 'deletedAt', width: 160, label: COLUMN_LABELS.deletedAt, synthetic: true })
+      }
     }
     ctx = {
       mode: vs.mode, icon: m.icon,
@@ -190,11 +236,22 @@ export function mountViewHost(root: HTMLElement): void {
       collapsed: t.collapsedGroups,
       vs,
       viewportW,
+      // passed explicitly: layout.ts otherwise measures document's FIRST
+      // .vh-scroll, which is the other pane's when this is the second one
+      viewportH: scroller.clientHeight || root.clientHeight || 600,
       compact: app.settings.compactView,
       detailsTotalW: isDetails ? detailsTotalWidth(detailCols) : undefined,
     })
     canvas.style.height = layout.totalH + 'px'
-    canvas.style.width = isDetails ? layout.totalW + 'px' : ''
+    // 'list' needs an explicit width for the same reason 'details' does, and it
+    // became load-bearing the moment paint() started culling horizontally:
+    // without it the canvas has no width of its own and the scroll range is
+    // inferred from whichever absolutely-positioned children happen to be
+    // rendered, so culling the off-screen columns collapsed the scrollbar to
+    // the width of the visible ones. Grid modes wrap to the viewport and must
+    // keep width:auto.
+    const explicitW = isDetails || vs.mode === 'list'
+    canvas.style.width = explicitW ? layout.totalW + 'px' : ''
     for (const [, el] of rendered) recycle(el)
     rendered.clear()
     if (pendingScroll !== null) {
@@ -260,14 +317,38 @@ export function mountViewHost(root: HTMLElement): void {
     const start = Math.max(0, lo - OVERSCAN)
     end = Math.min(L.items.length, end + OVERSCAN)
     lastPaintRange = [start, end]
+
+    /**
+     * HORIZONTAL CULLING, for 'list' mode.
+     *
+     * Every other mode is one viewport wide, so the vertical window above is
+     * the whole answer. 'list' flows into columns and scrolls sideways instead:
+     * measured on a 5207-file folder, the content is 104412px wide against a
+     * 627px viewport — 166 screens — and every item's `top` sits inside the one
+     * visible screenful, so the vertical search selected ALL 5207 and the DOM
+     * held 5207 nodes.
+     *
+     * The test is skipped entirely when the content fits, so no other mode pays
+     * for it, and the comparison is on the item's own box rather than on a
+     * column index so it stays correct if the flow ever changes.
+     */
+    const wide = L.totalW > scroller.clientWidth
+    const minX = wide ? scroller.scrollLeft - OVERSCAN_PX : 0
+    const maxX = wide ? scroller.scrollLeft + scroller.clientWidth + OVERSCAN_PX : 0
+    const onScreen = (i: number): boolean => {
+      if (!wide) return true
+      const it = L.items[i]
+      return it.left < maxX && it.left + it.width > minX
+    }
+
     for (const [i, el] of [...rendered]) {
-      if (i < start || i >= end) {
+      if (i < start || i >= end || !onScreen(i)) {
         rendered.delete(i)
         recycle(el)
       }
     }
     for (let i = start; i < end; i++) {
-      if (!rendered.has(i)) rendered.set(i, materialize(i))
+      if (!rendered.has(i) && onScreen(i)) rendered.set(i, materialize(i))
     }
   }
 
@@ -322,7 +403,47 @@ export function mountViewHost(root: HTMLElement): void {
     cutSet = c && c.op === 'cut' ? new Set(c.paths) : new Set()
   }
 
+  /**
+   * The honest-answer bar. A server index answers fast, but it answers from a
+   * snapshot and it caps its page — so a result set can be both quick and
+   * incomplete. Saying nothing would present an arbitrary alphabetical slice of
+   * a 12-day-old snapshot as "these are your files".
+   */
+  /** the bar is absolutely positioned, so the scroller has to be told to move down */
+  function setBanner(on: boolean): void {
+    bannerEl.hidden = !on
+    root.classList.toggle('vh-has-searchbar', on)
+  }
+
+  function updateBanner(): void {
+    const t = tab()
+    const info = t?.searchInfo
+    if (!t || t.searchQuery === null || !info || t.loading) { setBanner(false); return }
+    const bits: string[] = []
+    if (info.source === 'filefinder') {
+      const h = info.indexAgeHours
+      bits.push(h === undefined ? 'Results from the server index.'
+        : h < 48 ? `Results from the server index (updated ${Math.max(1, Math.round(h))}h ago).`
+          : `Results from the server index — last updated ${Math.round(h / 24)} days ago.`)
+    }
+    if (info.truncated) {
+      bits.push('Showing only the first matches found, in name order — narrow the search to see the rest.')
+    }
+    if (!bits.length) { setBanner(false); return }
+    bannerEl.innerHTML = `<span class="vh-searchbar-text">${escapeHtml(bits.join(' '))}</span>`
+      + '<button class="vh-searchbar-act" type="button">Search this folder directly</button>'
+    const act = bannerEl.querySelector('.vh-searchbar-act') as HTMLButtonElement | null
+    // the escape hatch: redo the same query against the live tree, which is
+    // slow but current. Only meaningful for a real folder.
+    if (act) {
+      act.hidden = t.path.includes('://')
+      act.addEventListener('click', () => { void t.startSearch(t.searchQuery ?? '', { live: true }) })
+    }
+    setBanner(true)
+  }
+
   function updateState(): void {
+    updateBanner()
     const t = tab()
     if (!t) { stateEl.hidden = true; return }
     if (t.error) {
@@ -371,6 +492,18 @@ export function mountViewHost(root: HTMLElement): void {
       scroller.scrollTop = it.top
     } else if (contentTop + it.height > scroller.scrollTop + scroller.clientHeight) {
       scroller.scrollTop = contentTop + it.height - scroller.clientHeight
+    }
+    // SIDEWAYS TOO, for 'list'. Its columns run off the right of the viewport,
+    // so arrowing or type-ahead into a later column used to select something
+    // the user could not see. That was survivable while every item was in the
+    // DOM; now that paint() culls off-screen columns the item is not rendered
+    // at all, so without this the selection would land on nothing visible.
+    if (L.totalW > scroller.clientWidth) {
+      if (it.left < scroller.scrollLeft) {
+        scroller.scrollLeft = it.left
+      } else if (it.left + it.width > scroller.scrollLeft + scroller.clientWidth) {
+        scroller.scrollLeft = it.left + it.width - scroller.clientWidth
+      }
     }
     paint()
   }
@@ -607,11 +740,20 @@ export function mountViewHost(root: HTMLElement): void {
     const hit = itemDataFromTarget(target)
     return hit && hit.item.kind === 'entry' ? hit.item.entry! : null
   }
-  const rightDrag = initRightDrag({ scroller, tab: () => tab(), entryFromEvent })
+  const rightDrag = initRightDrag({
+    scroller, tab: () => tab(), entryFromEvent,
+    pastRowContent: (target, clientX) => {
+      const el = (target as HTMLElement | null)?.closest?.('[data-idx]') as HTMLElement | null
+      return !!el && pastRowContent(el, clientX)
+    },
+  })
 
   let deferred: { path: string; labelHit: boolean; x: number; y: number } | null = null
 
   scroller.addEventListener('mousedown', (e) => {
+    // focus the owning pane FIRST: everything below (and every menu the click
+    // ends up opening) reads app.activeTab, which must already be this pane
+    opts.onActivate?.()
     const t = tab()
     if (!t || !layout) return
     if (e.button === 1) return
@@ -639,6 +781,18 @@ export function mountViewHost(root: HTMLElement): void {
 
     if (hit && hit.item.kind === 'entry') {
       const path = hit.item.entry!.path
+      // Stars: rate without touching the selection, and never let the press
+      // reach the row's native HTML5 drag or the rubber band below. Clicking
+      // the star a file already has clears the rating, which is the only way to
+      // get back to unrated with the mouse.
+      const starEl = (e.target as HTMLElement).closest?.('.vh-star') as HTMLElement | null
+      if (starEl && e.button === 0) {
+        const n = Number(starEl.dataset.star)
+        const cur = hit.item.entry!.rating ?? 0
+        applyRating([path], n === cur ? 0 : n)
+        e.preventDefault()
+        return
+      }
       const checkEl = (e.target as HTMLElement).closest?.('.vh-check')
       if (checkEl && ctx.checkboxes && e.button === 0) {
         // checkbox click toggles without clearing the rest
@@ -672,8 +826,11 @@ export function mountViewHost(root: HTMLElement): void {
         // (anything that is not the icon, label or checkbox) — dragging there
         // must select across items, not drag the file. A press that never moves
         // still selects the row, so plain/Ctrl/Shift clicking anywhere works.
-        const onHotspot = !!(e.target as HTMLElement).closest?.('.vh-icon, .vh-label, .vh-check, .vh-thumbimg')
-        if (!onHotspot && hit.el.classList.contains('vh-row')) {
+        // Exception: pressing an ALREADY SELECTED item drags the selection from
+        // anywhere on its row — otherwise "click a file, then drag it somewhere"
+        // (the most natural way to move a file) would band instead of drag.
+        const onHotspot = !!(e.target as HTMLElement).closest?.('.vh-icon, .vh-label, .vh-check, .vh-thumbimg, .vh-star')
+        if (!onHotspot && !t.selection.has(path) && hit.el.classList.contains('vh-row')) {
           e.preventDefault()          // stops the row's native HTML5 drag
           startBand(e, applyClick)
           return
@@ -725,6 +882,8 @@ export function mountViewHost(root: HTMLElement): void {
     cancelSlowRename()
     const t = tab()
     if (!t) return
+    // two quick clicks on the stars is a rating correction, not "open the file"
+    if ((e.target as HTMLElement).closest?.('.vh-star')) return
     const hit = itemDataFromTarget(e.target)
     if (!hit) return
     if (hit.item.kind === 'header') {
@@ -760,6 +919,29 @@ export function mountViewHost(root: HTMLElement): void {
     openContextMenuAt(e)
   })
 
+  /**
+   * Is this click past the end of a row's actual CONTENT?
+   *
+   * In details view the cells have fixed widths that stop at the last column,
+   * but the row element spans the whole viewport — so on a wide window most of
+   * each row is a strip of nothing that still counts as the file. Right-clicking
+   * out there gave the file's menu when the obvious reading is "I clicked the
+   * empty part of the folder".
+   *
+   * Measured off the last CELL rather than computed from the column widths, so
+   * it stays exact under horizontal scrolling and needs no arithmetic to agree
+   * with the layout. Rows without cells — content, tiles, the icon grids —
+   * return false: their content genuinely fills the row (.vh-content-main is
+   * flex:1), so there is no empty strip to speak of and their behaviour is
+   * unchanged.
+   */
+  function pastRowContent(el: HTMLElement, clientX: number): boolean {
+    const cells = el.querySelectorAll('.vh-cell')
+    const last = cells[cells.length - 1] as HTMLElement | undefined
+    if (!last) return false
+    return clientX > last.getBoundingClientRect().right
+  }
+
   function openContextMenuAt(e: MouseEvent): void {
     const t = tab()
     if (!t) return
@@ -770,6 +952,14 @@ export function mountViewHost(root: HTMLElement): void {
     }
     if (hit && hit.item.kind === 'entry') {
       const path = hit.item.entry!.path
+      // The empty strip past the last column belongs to the folder, not to the
+      // row it happens to line up with — UNLESS that row is already selected,
+      // in which case the user is plainly acting on their selection and taking
+      // the file menu away from them would be the annoying answer.
+      if (!t.selection.has(path) && pastRowContent(hit.el, e.clientX)) {
+        app.emit('background-context', { x: e.clientX, y: e.clientY })
+        return
+      }
       if (!t.selection.has(path)) {
         t.anchorPath = path
         t.setSelection([path], path)
@@ -931,7 +1121,7 @@ export function mountViewHost(root: HTMLElement): void {
   // ---------- context-menu key (Shift+F10 / Menu key) ----------
   const onCtxKey = (): void => {
     const t = tab()
-    if (!t || !layout) return
+    if (!t || !layout || !isFocusedPane()) return
     const fV = visIndexOf(t.focusPath)
     if (fV >= 0) {
       const idx = layout.itemOfVisible[fV]
@@ -984,12 +1174,17 @@ export function mountViewHost(root: HTMLElement): void {
     },
   })
 
+  // ---------- peek popover (hover dwell / Space) ----------
+  attachPeek({ scroller, tab: () => tab(), entryFromEvent, onActivate: opts.onActivate })
+
   // ---------- app events ----------
-  app.on('tab-listing', (t: Tab) => { if (t === app.activeTab) scheduleRebuild() })
-  app.on('tab-viewstate', (t: Tab) => { if (t === app.activeTab) scheduleRebuild() })
-  app.on('tab-selection', (t: Tab) => { if (t === app.activeTab) syncSelection() })
-  app.on('tab-loading', (t: Tab) => { if (t === app.activeTab) updateState() })
-  app.on('tabs-changed', () => {
+  // every tab-scoped event is filtered against THIS host's pane, never against
+  // app.activeTab — the unfocused pane keeps rendering its own tab
+  app.on('tab-listing', (t: Tab) => { if (t === tab()) scheduleRebuild() })
+  app.on('tab-viewstate', (t: Tab) => { if (t === tab()) scheduleRebuild() })
+  app.on('tab-selection', (t: Tab) => { if (t === tab()) syncSelection() })
+  app.on('tab-loading', (t: Tab) => { if (t === tab()) updateState() })
+  const onTabSwap = (): void => {
     cancelBand()
     renamer.cancel()
     cancelSlowRename()
@@ -997,9 +1192,13 @@ export function mountViewHost(root: HTMLElement): void {
     if (t) lastPath.set(t.id, t.path)
     pendingScroll = t ? scrollPos.get(t.id) ?? 0 : 0
     scheduleRebuild()
-  })
+  }
+  app.on('tabs-changed', onTabSwap)
+  // split opened/closed or the tab's panes were swapped: this host may now be
+  // showing a different Tab entirely, and its box has certainly resized
+  app.on('panes-changed', onTabSwap)
   app.on('tab-navigated', (t: Tab) => {
-    if (t !== app.activeTab) return
+    if (t !== tab()) return
     renamer.cancel()
     cancelBand()
     cancelSlowRename()
@@ -1012,7 +1211,8 @@ export function mountViewHost(root: HTMLElement): void {
   })
   app.on('settings-changed', () => scheduleRebuild())
   app.on('clipboard-changed', () => { updateCutSet(); syncSelection() })
-  app.on('start-rename', (path: string) => beginRename(path))
+  // rename is a global verb (F2 / command bar): only the focused pane runs it
+  app.on('start-rename', (path: string) => { if (isFocusedPane()) beginRename(path) })
 
   updateCutSet()
   rebuild()

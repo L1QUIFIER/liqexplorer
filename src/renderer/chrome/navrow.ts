@@ -2,8 +2,25 @@
 // child-folder dropdowns, « overflow, edit mode with autocomplete), search box.
 import { app, liq, Tab } from '../core/app'
 import type { FileEntry } from '../../shared/types'
+import { isArchiveUri } from '../../shared/archive'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
+
+/** the virtual locations Tab.startListing knows how to show */
+const NAV_SCHEMES = ['home://', 'trash://', 'computer://', 'starred://', 'finder://']
+
+/**
+ * Can this location be searched?
+ *
+ * Not the same question as "is it virtual", which is what this used to ask.
+ * trash:// and computer:// are virtual AND unsearchable (the walker cannot read
+ * them). finder:// is virtual and is nothing BUT search — it has no listing of
+ * its own, so disabling the box there would leave a page with no way to use it.
+ */
+export function canSearch(path: string): boolean {
+  if (path === 'finder://') return true
+  return !path.includes('://')
+}
 
 const SVG_BACK = '<svg width="16" height="16" viewBox="0 0 16 16"><path d="M14 8H2.5M7 3.5 2.5 8 7 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 const SVG_FWD = '<svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 8h11.5M9 3.5 13.5 8 9 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
@@ -19,12 +36,15 @@ interface Crumb { label: string; path: string; name: string }
 function normPath(p: string): string { return p.replace(/\/+$/, '') || '/' }
 
 function labelForPath(path: string): string {
-  if (path === 'home://') return 'Home'
+  if (path === 'home://') return 'Home'      // reserved for the home:// page
   if (path === 'trash://') return 'Recycle Bin'
   if (path === 'computer://') return 'This PC'
+  if (path === 'starred://') return 'Starred'
+  if (path === 'finder://') return 'Server Index'
   const n = normPath(path)
   if (n === '/') return 'Computer'
-  if (n === normPath(app.homePath)) return 'Home'
+  // the user-profile folder is named after the user (as the nav pane does), so
+  // it can't be confused with the Home page
   return n.split('/').pop() ?? n
 }
 
@@ -32,13 +52,16 @@ function crumbsFor(path: string): Crumb[] {
   if (path === 'home://') return [{ label: 'Home', path: 'home://', name: 'Home' }]
   if (path === 'trash://') return [{ label: 'Recycle Bin', path: 'trash://', name: 'Recycle Bin' }]
   if (path === 'computer://') return [{ label: 'This PC', path: 'computer://', name: 'This PC' }]
+  if (path === 'starred://') return [{ label: 'Starred', path: 'starred://', name: 'Starred' }]
+  if (path === 'finder://') return [{ label: 'Server Index', path: 'finder://', name: 'Server Index' }]
   if (path.includes('://')) return [{ label: path, path, name: path }]
   const norm = normPath(path)
   const home = normPath(app.homePath || '')
   const out: Crumb[] = []
   let rest: string
   if (home !== '/' && (norm === home || norm.startsWith(home + '/'))) {
-    out.push({ label: 'Home', path: home, name: home.split('/').pop() ?? 'Home' })
+    const user = home.split('/').pop() ?? 'Home'
+    out.push({ label: user, path: home, name: user })
     rest = norm.slice(home.length)
   } else {
     out.push({ label: 'Computer', path: '/', name: '/' })
@@ -56,6 +79,8 @@ function locIconFor(t: Tab): string {
   if (t.path === 'home://') return 'go-home,user-home,folder-home,folder'
   if (t.path === 'trash://') return 'user-trash,folder'
   if (t.path === 'computer://') return 'computer,drive-harddisk,folder'
+  if (t.path === 'starred://') return 'starred,emblem-favorite,bookmarks,folder'
+  if (t.path === 'finder://') return 'network-server,folder-remote,system-search,folder'
   if (normPath(t.path) === normPath(app.homePath)) return 'user-home,folder-home,folder'
   if (normPath(t.path) === '/') return 'computer,drive-harddisk,folder'
   return 'folder'
@@ -335,16 +360,31 @@ export function mountNavRow(root: HTMLElement): void {
     let v = raw.trim()
     if (!v) { closeEdit(); return }
     if (v.startsWith('~')) v = normPath(app.homePath) + v.slice(1)
-    if (!v.includes('://')) {
-      v = normPath(v)
-      const ok = await liq.pathExists(v)
-      if (!ok) {
+    if (v.includes('://')) {
+      // only the schemes Tab.startListing can actually list. Anything else
+      // (smb://, a typo like Home://) used to navigate unchecked and strand the
+      // tab on a raw ENOENT page with Up and search dead and a watch registered.
+      if (!NAV_SCHEMES.includes(v) && !isArchiveUri(v)) {
         shake()
-        showErrorHint(`LiqExplorer can’t find ${v}. Check the spelling and try again.`)
+        showErrorHint(`LiqExplorer can’t open ${v}. It isn’t a location this app can show.`)
         return
       }
+      closeEdit()
+      void t.navigate(v)
+      return
+    }
+    v = normPath(v)
+    // stat rather than exists: a FILE passes exists() and used to be navigated
+    // INTO, leaving the tab pointing at a non-directory. Explorer opens it and
+    // leaves the tab where it was.
+    const [st] = await liq.statEntries([v]) as (FileEntry | null)[]
+    if (!st) {
+      shake()
+      showErrorHint(`LiqExplorer can’t find ${v}. Check the spelling and try again.`)
+      return
     }
     closeEdit()
+    if (!st.isDir) { void liq.openPath(v); return }
     void t.navigate(v)
   }
 
@@ -383,16 +423,20 @@ export function mountNavRow(root: HTMLElement): void {
   const renderSearch = () => {
     const t = app.activeTab
     if (!t) return
-    // the main-side search walker can't read virtual roots (trash://,
-    // computer://) — it would report 0 results, so disable instead
-    searchInput.disabled = t.isVirtual
-    searchInput.placeholder = t.isVirtual ? 'Search unavailable here' : `Search ${labelForPath(t.path)}`
+    // the main-side search walker can't read most virtual roots (trash://,
+    // computer://) — it would report 0 results, so disable instead. finder://
+    // is the exception: searching is the only thing it does.
+    const ok = canSearch(t.path)
+    searchInput.disabled = !ok
+    searchInput.placeholder = !ok
+      ? 'Search unavailable here'
+      : t.path === 'finder://' ? 'Search the server index' : `Search ${labelForPath(t.path)}`
     searchInput.value = t.searchQuery ?? ''
     searchClear.hidden = t.searchQuery === null
   }
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && searchInput.value.trim()) {
-      if (app.activeTab.isVirtual) return
+      if (!canSearch(app.activeTab.path)) return
       void app.activeTab.startSearch(searchInput.value.trim())
     } else if (e.key === 'Escape') {
       e.stopPropagation()

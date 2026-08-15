@@ -13,6 +13,26 @@ const OLD_RAR_RE = /\.r(\d+)$/i
 const NUMBERED_RE = /\.(\d{3,})$/
 const SPLIT_ZIP_RE = /\.z(\d+)$/i
 
+// ---- archive:// URIs (Explorer's "browse a zip like a folder") ----
+// Shape: archive:///abs/path/file.zip!/inner/path   (empty inner = archive root)
+
+const ARCHIVE_URI_RE = /^archive:\/\/(.*?)(?:!\/(.*))?$/
+
+export function archiveUri(archive: string, inner = ''): string {
+  const i = inner.replace(/^\/+|\/+$/g, '')
+  return `archive://${archive}!/${i}`
+}
+
+export function parseArchiveUri(uri: string): { archive: string; inner: string } | null {
+  const m = ARCHIVE_URI_RE.exec(uri)
+  if (!m || !m[1]) return null
+  return { archive: m[1], inner: (m[2] ?? '').replace(/^\/+|\/+$/g, '') }
+}
+
+export function isArchiveUri(p: string): boolean {
+  return p.startsWith('archive://')
+}
+
 export function isArchiveName(name: string): boolean {
   return SINGLE_RE.test(name) || PART_RAR_RE.test(name) || NUMBERED_RE.test(name)
 }

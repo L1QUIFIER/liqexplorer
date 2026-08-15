@@ -1,8 +1,9 @@
 // Home page data sources: the favorites store (Quick access folders +
 // Favorites files) and the GTK recent-files list.
 //
-// Favorites live in ~/.local/state/liqexplorer/favorites.json — NEVER beside
-// the code, which may sit on a share read by another OS. Recents are read from
+// Favorites live in the app state dir (state/settings.ts owns its location, so
+// LIQEXPLORER_TEST isolates them) — NEVER beside the code, which may sit on a
+// share read by another OS. Recents are read from
 // ~/.local/share/recently-used.xbel, the freedesktop store GTK/Nemo share, so
 // "Recent" matches what the rest of the desktop shows. That file is ~90 KB and
 // re-read only when its mtime/size change.
@@ -17,11 +18,15 @@ import * as path from 'node:path'
 import { CH, PUSH } from '../../shared/ipc'
 import type { FavoriteEntry, RecentEntry } from '../../shared/types'
 import { isRemotePath } from '../fs/list'
+import { STATE_DIR, TEST_PROFILE } from '../state/settings'
 import { broadcast } from '../windows'
 
-const STATE_DIR = path.join(os.homedir(), '.local/state/liqexplorer')
 const FAV_FILE = path.join(STATE_DIR, 'favorites.json')
-const XBEL_FILE = path.join(os.homedir(), '.local/share/recently-used.xbel')
+/** The store GTK/Nemo share. Under LIQEXPLORER_TEST it is redirected into the
+ *  scratch state dir (seeded once from the real file) so "Clear recent files"
+ *  in a QA run cannot truncate the list every desktop app depends on. */
+const REAL_XBEL = path.join(os.homedir(), '.local/share/recently-used.xbel')
+const XBEL_FILE = TEST_PROFILE ? path.join(STATE_DIR, 'recently-used.xbel') : REAL_XBEL
 
 const XBEL_HEADER =
   '<?xml version="1.0" encoding="UTF-8"?>\n' +
@@ -32,11 +37,24 @@ const XBEL_HEADER =
 let tmpCounter = 0
 
 /** Replace a file atomically — recently-used.xbel is shared with every GTK app.
- *  0600 because both files list private paths (GTK keeps the xbel that way). */
+ *  0600 because both files list private paths (GTK keeps the xbel that way).
+ *  The fsync before the rename is what stops an unclean shutdown from leaving a
+ *  zero-length favorites.json behind the freshly renamed name. */
 async function writeAtomic(file: string, txt: string): Promise<void> {
   const tmp = `${file}.liqtmp-${process.pid}-${tmpCounter++}`
-  await fsp.writeFile(tmp, txt, { encoding: 'utf8', mode: 0o600 })
-  await fsp.rename(tmp, file)
+  try {
+    const fh = await fsp.open(tmp, 'w', 0o600)
+    try {
+      await fh.writeFile(txt, 'utf8')
+      await fh.sync()
+    } finally {
+      await fh.close()
+    }
+    await fsp.rename(tmp, file)
+  } catch (err) {
+    await fsp.unlink(tmp).catch(() => {})
+    throw err
+  }
 }
 
 /** access() unless the path is on a network mount (see file header). */
@@ -50,6 +68,12 @@ async function existsSafe(p: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 let favorites: FavoriteEntry[] | null = null
+/** favorites.json exists but could not be read (EMFILE/EIO/EACCES) or could not
+ *  be quarantined after a parse failure. The list we are holding is therefore
+ *  NOT the user's list, and writing it back would destroy every favorite they
+ *  ever saved — there is no backup and no undo — so every save is refused until
+ *  a read succeeds. */
+let loadFailed = false
 
 function sanitize(raw: unknown): FavoriteEntry[] {
   if (!Array.isArray(raw)) return []
@@ -70,17 +94,52 @@ function sanitize(raw: unknown): FavoriteEntry[] {
   return out
 }
 
+/**
+ * Only a MISSING file means "no favorites yet". Every other failure is a case
+ * where the user's favorites may well be intact on disk and simply unreadable
+ * right now, so the empty result is neither cached nor writable.
+ */
 async function loadFavorites(): Promise<FavoriteEntry[]> {
   if (favorites) return favorites
+  let txt: string
   try {
-    favorites = sanitize(JSON.parse(await fsp.readFile(FAV_FILE, 'utf8')))
+    txt = await fsp.readFile(FAV_FILE, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      loadFailed = false
+      favorites = []                     // no file yet: legitimately empty
+      return favorites
+    }
+    loadFailed = true                    // transient (EMFILE/EIO) or unreadable
+    console.warn('[favorites] favorites.json could not be read:', (err as Error)?.message)
+    return []                            // not cached: the next call retries
+  }
+  if (!txt.trim()) { loadFailed = false; favorites = []; return favorites }
+  try {
+    const parsed: unknown = JSON.parse(txt)
+    if (!Array.isArray(parsed)) throw new Error('favorites.json is not a list')
+    favorites = sanitize(parsed)
+    loadFailed = false
   } catch {
-    favorites = []                       // missing or corrupt: start clean
+    // readable but not valid JSON (hand-edited, partial restore): keep the
+    // bytes under a .bad-<ts> name so nothing is thrown away, then start clean
+    const bad = `${FAV_FILE}.bad-${Date.now()}`
+    try {
+      await fsp.rename(FAV_FILE, bad)
+      console.warn(`[favorites] favorites.json was corrupt; kept it as ${bad}`)
+      loadFailed = false
+      favorites = []
+    } catch (err) {
+      loadFailed = true                  // could not preserve it: never write
+      console.warn('[favorites] favorites.json is corrupt and could not be set aside:', (err as Error)?.message)
+      return []
+    }
   }
   return favorites
 }
 
 async function saveFavorites(list: FavoriteEntry[]): Promise<void> {
+  if (loadFailed) return                 // see loadFailed: this would wipe the file
   favorites = list
   await fsp.mkdir(STATE_DIR, { recursive: true })
   await writeAtomic(FAV_FILE, JSON.stringify(list, null, 2) + '\n')
@@ -105,24 +164,44 @@ export async function listFavorites(): Promise<FavoriteEntry[]> {
   return list.filter((_, i) => alive[i])
 }
 
-export async function addFavorite(paths: string[]): Promise<FavoriteEntry[]> {
-  const list = [...(await loadFavorites())]
+/** The renderer already holds the FileEntry, so it can say whether a path is a
+ *  directory; isDirSafe's extension guess is only the fallback for callers
+ *  (older payloads, drops) that cannot. */
+export type FavoriteInput = string | { path?: unknown; isDir?: unknown }
+
+function inputPath(raw: FavoriteInput): string {
+  const p = typeof raw === 'string' ? raw
+    : (raw && typeof raw.path === 'string') ? raw.path : ''
+  return p ? p.replace(/\/+$/, '') || '/' : ''
+}
+
+export async function addFavorite(items: FavoriteInput[]): Promise<FavoriteEntry[]> {
+  const current = await loadFavorites()
+  if (loadFailed) return current         // unreadable store: never write over it
+  const list = [...current]
   const have = new Set(list.map(e => e.path))
   let added = false
-  for (const raw of paths ?? []) {
-    const p = typeof raw === 'string' ? raw.replace(/\/+$/, '') || '/' : ''
+  for (const raw of items ?? []) {
+    const p = inputPath(raw)
     if (!p.startsWith('/') || have.has(p)) continue
     have.add(p)
-    list.push({ path: p, name: path.basename(p) || p, isDir: await isDirSafe(p), addedAt: Date.now() })
+    const told = typeof raw === 'object' && raw !== null && typeof raw.isDir === 'boolean'
+      ? raw.isDir
+      : undefined
+    list.push({
+      path: p, name: path.basename(p) || p,
+      isDir: told ?? await isDirSafe(p), addedAt: Date.now(),
+    })
     added = true
   }
   if (added) await saveFavorites(list)
   return list
 }
 
-export async function removeFavorite(paths: string[]): Promise<FavoriteEntry[]> {
-  const drop = new Set((paths ?? []).map(p => p.replace(/\/+$/, '') || '/'))
+export async function removeFavorite(items: FavoriteInput[]): Promise<FavoriteEntry[]> {
+  const drop = new Set((items ?? []).map(inputPath).filter(Boolean))
   const list = await loadFavorites()
+  if (loadFailed) return list            // unreadable store: never write over it
   const kept = list.filter(e => !drop.has(e.path))
   if (kept.length !== list.length) await saveFavorites(kept)
   return kept
@@ -195,8 +274,21 @@ function parseXbel(txt: string): RecentEntry[] {
 }
 
 let xbelCache: { mtimeMs: number; size: number; entries: RecentEntry[] } | null = null
+let xbelSeeded = !TEST_PROFILE
+
+/** Test profile: start the private xbel off as a copy of the real one so Recent
+ *  still has something to show, then never touch the shared file again. */
+async function seedTestXbel(): Promise<void> {
+  if (xbelSeeded) return
+  xbelSeeded = true
+  try {
+    await fsp.mkdir(STATE_DIR, { recursive: true })
+    await fsp.copyFile(REAL_XBEL, XBEL_FILE, fsp.constants.COPYFILE_EXCL)
+  } catch { /* already seeded, or no real list — Recent just starts empty */ }
+}
 
 async function readXbel(): Promise<RecentEntry[]> {
+  await seedTestXbel()
   const st = await fsp.stat(XBEL_FILE).catch(() => null)
   if (!st) { xbelCache = null; return [] }
   if (xbelCache && xbelCache.mtimeMs === st.mtimeMs && xbelCache.size === st.size) {
@@ -262,8 +354,8 @@ export async function clearRecent(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 ipcMain.handle(CH('listFavorites'), () => listFavorites())
-ipcMain.handle(CH('addFavorite'), (_e, paths: string[]) => addFavorite(paths))
-ipcMain.handle(CH('removeFavorite'), (_e, paths: string[]) => removeFavorite(paths))
+ipcMain.handle(CH('addFavorite'), (_e, items: FavoriteInput[]) => addFavorite(items))
+ipcMain.handle(CH('removeFavorite'), (_e, items: FavoriteInput[]) => removeFavorite(items))
 ipcMain.handle(CH('listRecent'), (_e, limit: number) => listRecent(limit))
 ipcMain.handle(CH('removeRecent'), (_e, p: string) => removeRecent(p))
 ipcMain.handle(CH('clearRecent'), () => clearRecent())

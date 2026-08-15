@@ -9,6 +9,7 @@
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
+import { STATE_DIR, TEST_PROFILE } from '../state/settings'
 import * as path from 'node:path'
 import { execFile } from 'node:child_process'
 import type { DriveDetail, Place } from '../../shared/types'
@@ -116,8 +117,25 @@ async function statfsSafe(p: string, timeoutMs = 2000): Promise<{ total: number;
 // GTK bookmarks
 // ---------------------------------------------------------------------------
 
+const REAL_BOOKMARKS = path.join(os.homedir(), '.config', 'gtk-3.0', 'bookmarks')
+
+/**
+ * Pin/unpin EDIT this file, and it is shared with Nemo and every GTK file
+ * chooser — so a test run must never write the real one. (It did: a scripted
+ * unpin during QA removed entries from the user's actual bookmarks.) Under
+ * LIQEXPLORER_TEST the file is redirected into the test profile and seeded
+ * from the real one on first use, so test runs still see realistic data.
+ */
 function bookmarksFile(): string {
-  return path.join(os.homedir(), '.config', 'gtk-3.0', 'bookmarks')
+  if (!TEST_PROFILE) return REAL_BOOKMARKS
+  const copy = path.join(STATE_DIR, 'gtk-bookmarks')
+  if (!fs.existsSync(copy)) {
+    try {
+      fs.mkdirSync(STATE_DIR, { recursive: true })
+      fs.copyFileSync(REAL_BOOKMARKS, copy)
+    } catch { try { fs.writeFileSync(copy, '') } catch { /* read-only: fall through */ } }
+  }
+  return copy
 }
 
 let bmTmpCounter = 0
@@ -235,7 +253,11 @@ async function computePlaces(): Promise<Place[]> {
     const p = ud[key]
     if (!p || p === h) continue
     try { if (!fs.statSync(p).isDirectory()) continue } catch { continue }
-    places.push({ id: `user-dir:${key}`, kind: 'user-dir', label, path: p, icons: [icon, 'folder'] })
+    if (unpinnedSet().has(p)) continue          // user took it out of Quick access
+    // Quick access entries are pinned by definition (Windows ships Desktop /
+    // Downloads / Documents / Pictures pinned), so they carry the pin glyph and
+    // can be unpinned like any other.
+    places.push({ id: `user-dir:${key}`, kind: 'user-dir', label, path: p, icons: [icon, 'folder'], pinned: true })
   }
 
   // (b) pinned GTK bookmarks. A bookmark for a folder that is already an XDG
@@ -376,6 +398,7 @@ export async function getDriveDetails(): Promise<DriveDetail[]> {
 }
 
 export async function pinPlace(p: string): Promise<void> {
+  await setUnpinned(p, false)      // re-pinning restores a removed user dir
   const file = bookmarksFile()
   await fsp.mkdir(path.dirname(file), { recursive: true })
   let txt = ''
@@ -391,13 +414,48 @@ export async function pinPlace(p: string): Promise<void> {
 export async function unpinPlace(p: string): Promise<void> {
   const file = bookmarksFile()
   let txt = ''
-  try { txt = await fsp.readFile(file, 'utf8') } catch { return }
-  const keep = txt.split('\n').filter(Boolean).filter(l => {
-    const uri = l.split(' ')[0] ?? ''
-    return decodeFileUri(uri) !== p
-  })
-  await writeBookmarksAtomic(file, keep.length ? keep.join('\n') + '\n' : '')
+  try { txt = await fsp.readFile(file, 'utf8') } catch { txt = '' }
+  if (txt) {
+    const keep = txt.split('\n').filter(Boolean).filter(l => {
+      const uri = l.split(' ')[0] ?? ''
+      return decodeFileUri(uri) !== p
+    })
+    await writeBookmarksAtomic(file, keep.length ? keep.join('\n') + '\n' : '')
+  }
+  // The XDG user dirs are synthesized into Quick access whether or not they are
+  // bookmarked (Windows pins Desktop/Downloads/Documents/Pictures by default),
+  // so dropping the bookmark alone would leave the row sitting there and make
+  // "Unpin" look broken. Remember the removal instead.
+  await setUnpinned(p, true)
   void fireChanged()
+}
+
+// ---- user-dir removals (paths the user unpinned out of Quick access) ----
+
+const unpinnedFile = (): string => path.join(STATE_DIR, 'quickaccess.json')
+let unpinnedCache: Set<string> | null = null
+
+function unpinnedSet(): Set<string> {
+  if (unpinnedCache) return unpinnedCache
+  try {
+    const raw = fs.readFileSync(unpinnedFile(), 'utf8')
+    const arr = JSON.parse(raw) as { unpinned?: string[] }
+    unpinnedCache = new Set(Array.isArray(arr.unpinned) ? arr.unpinned : [])
+  } catch {
+    unpinnedCache = new Set()          // missing or unreadable: nothing removed
+  }
+  return unpinnedCache
+}
+
+async function setUnpinned(p: string, on: boolean): Promise<void> {
+  const set = unpinnedSet()
+  if (on) set.add(p); else set.delete(p)
+  try {
+    await fsp.mkdir(STATE_DIR, { recursive: true })
+    const tmp = unpinnedFile() + `.tmp-${process.pid}`
+    await fsp.writeFile(tmp, JSON.stringify({ unpinned: [...set] }, null, 1), 'utf8')
+    await fsp.rename(tmp, unpinnedFile())
+  } catch { /* keeps working this session, just not remembered */ }
 }
 
 function run(cmd: string, args: string[], timeoutMs = 20_000): Promise<{ ok: boolean; error?: string }> {

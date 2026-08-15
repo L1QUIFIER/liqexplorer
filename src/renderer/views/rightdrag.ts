@@ -16,6 +16,8 @@ import type { FileEntry } from '../../shared/types'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
 import { iconURL } from './items'
+import { isArchiveName, archiveStem } from '../../shared/archive'
+import { volumeOf } from '../core/mounts'
 
 const DRAG_THRESHOLD = 6
 
@@ -23,6 +25,13 @@ export interface RightDragHost {
   scroller: HTMLElement
   tab(): Tab | null
   entryFromEvent(target: EventTarget | null): FileEntry | null
+  /**
+   * True when this press landed past the end of a row's visible content — the
+   * empty strip to the right of the last column in details view. Supplied by
+   * the view host so there is ONE definition of where a row stops, shared with
+   * the context-menu logic.
+   */
+  pastRowContent(target: EventTarget | null, clientX: number): boolean
 }
 
 interface Armed {
@@ -35,20 +44,6 @@ interface Armed {
 interface DropTarget {
   path: string
   label: string
-}
-
-let mountPoints: string[] = []
-void liq.invoke('mountPoints').then((m: string[]) => { mountPoints = m }).catch(() => {})
-app.on('places-changed', () => {
-  void liq.invoke('mountPoints').then((m: string[]) => { mountPoints = m }).catch(() => {})
-})
-
-/** longest-prefix mount point containing p ('' when the table is unavailable) */
-function volumeOf(p: string): string {
-  for (const m of mountPoints) {
-    if (p === m || p.startsWith(m === '/' ? '/' : m + '/')) return m
-  }
-  return ''
 }
 
 /** Explorer's default drag action: move within a volume, copy across volumes. */
@@ -67,7 +62,18 @@ export interface RightDragHandle {
   consumedMenu(): boolean
 }
 
+/** Every mounted view host, so a right-drag started in one pane can resolve a
+ *  destination in the OTHER pane — each host closes over its own layout, so the
+ *  element under the cursor has to be handed back to whichever host owns it. */
+const hosts: RightDragHost[] = []
+
+function hostAt(el: Node): RightDragHost | null {
+  for (const h of hosts) if (h.scroller.contains(el)) return h
+  return null
+}
+
 export function initRightDrag(host: RightDragHost): RightDragHandle {
+  hosts.push(host)
   let armed: Armed | null = null
   let dragging = false
   let ghost: HTMLElement | null = null
@@ -132,10 +138,12 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
       return { path: p, label: declared.dataset.liqLabel || baseName(p) }
     }
 
-    if (host.scroller.contains(el)) {
-      const entry = host.entryFromEvent(el)
+    // the drop may land in either pane, so ask whichever host owns the element
+    const h = hostAt(el)
+    if (h) {
+      const entry = h.entryFromEvent(el)
       if (entry?.isDir) return { path: entry.path, label: entry.name }
-      const t = host.tab()
+      const t = h.tab()
       if (!t || t.isVirtual) return null
       return { path: t.path, label: baseName(t.path) }
     }
@@ -149,7 +157,7 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
     clearMark()
     // only highlight when the row itself is the destination (not the folder background)
     if (row && target && (row.dataset.liqPath === target.path ||
-        host.entryFromEvent(row)?.path === target.path)) {
+        hostAt(row)?.entryFromEvent(row)?.path === target.path)) {
       row.classList.add('drop-target')
       marked = row
     }
@@ -177,6 +185,25 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
     const dflt = defaultDragEffect(sources[0], dest.path)
     const sameFolder = sources.every(p => p.slice(0, p.lastIndexOf('/')) === dest.path)
     const plural = sources.length > 1
+    // 7-Zip's shell extension puts extraction verbs in the right-drag menu, and
+    // it is exactly where you want them: drag an archive onto a folder and
+    // unpack it straight in, without navigating there first.
+    const archives = sources.filter(p => isArchiveName(p.split('/').pop() ?? ''))
+    const extractItems: MenuItem[] = archives.length ? [
+      { separator: true },
+      {
+        label: archives.length > 1 ? `Extract ${archives.length} archives here` : 'Extract here',
+        onClick: () => {
+          void liq.invoke('extractArchives', { archives, mode: 'auto', dest: dest.path })
+        },
+      },
+      {
+        label: archives.length > 1 ? 'Extract each to its own folder' : `Extract to ${archiveStem(archives[0].split('/').pop() ?? '')}\\`,
+        onClick: () => {
+          void liq.invoke('extractArchives', { archives, mode: 'named', dest: dest.path })
+        },
+      },
+    ] : []
     const items: MenuItem[] = [
       {
         label: 'Copy here', bold: dflt === 'copy' && !sameFolder,
@@ -190,6 +217,7 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
         label: plural ? 'Create shortcuts here' : 'Create shortcut here',
         onClick: () => { void liq.startOp({ kind: 'symlink', sources, dest: dest.path }) },
       },
+      ...extractItems,
       { separator: true },
       { label: 'Cancel' },
     ]
@@ -216,6 +244,11 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
     if (!t || t.isVirtual) return
     const entry = host.entryFromEvent(e.target)
     if (!entry) return
+    // The empty strip past the last column is the folder's, not the row's: a
+    // right-press there must neither select the row nor arm a right-drag of it,
+    // or the menu that follows would be the file's. An already-selected row is
+    // the exception — then the press is plainly about that selection.
+    if (!t.selection.has(entry.path) && host.pastRowContent(e.target, e.clientX)) return
     // right-press selects the item first, exactly like a left-press would
     if (!t.selection.has(entry.path)) {
       t.anchorPath = entry.path

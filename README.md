@@ -2,7 +2,7 @@
 
 Windows 11–style File Explorer for Linux.
 
-Tabs, command bar, breadcrumb address bar, navigation tree, details/icon views with sort & group, Explorer-style context menus, file ops with progress/conflict/undo, and desktop-compatible trash, clipboard, and thumbnails (via GIO/gvfs).
+Tabs, command bar, breadcrumb address bar, navigation tree, details/icon/preview views with sort & group, Explorer-style context menus, file ops with progress/conflict/undo, archive browsing, media viewer/previews, and desktop-compatible trash, clipboard, and thumbnails (via GIO/gvfs).
 
 > **Status: early development (v0.1).** Core shell is usable for trying out, but this is not a daily driver yet. Best on **X11** (Cinnamon/GNOME/XFCE/MATE/KDE). Wayland works for browsing with limited clipboard interop.
 

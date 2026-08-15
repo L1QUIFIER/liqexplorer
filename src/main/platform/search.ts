@@ -15,11 +15,12 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import { ipcMain, type WebContents } from 'electron'
 import { CH, PUSH } from '../../shared/ipc'
-import type { FileEntry, SearchChunk, SearchRequest } from '../../shared/types'
-import { entryFor } from '../fs/list'
+import type { FileEntry, SearchChunk, SearchRequest, SearchSource } from '../../shared/types'
+import { FINDER_URI } from '../../shared/types'
+import { entryFor, isRemotePath } from '../fs/list'
 import { getSettings } from '../state/settings'
-import { indexCovers, indexSearch, nameMatcher, refreshIfStale } from './indexer'
-import { getCapabilities } from './capabilities'
+import { hiddenBelow, indexCovers, indexSearch, nameMatcher, refreshIfStale } from './indexer'
+import { ffEnabled, ffSearch, PAGE_LIMIT } from './filefinder'
 
 const MAX_RESULTS = 10_000
 const BATCH_SIZE = 200
@@ -33,11 +34,18 @@ interface SearchJob {
   cancelled: boolean
   finished: boolean
   rg?: ChildProcess
+  /** kills an in-flight FileFinder request, like rg?.kill() kills the child */
+  abort?: AbortController
   batch: FileEntry[]
   seen: Set<string>
   count: number
   flushTimer?: NodeJS.Timeout
   error?: string
+  /** whichever source actually answered — reported on the final chunk */
+  source: SearchSource
+  /** the answer was capped, by the server or by MAX_RESULTS */
+  truncated?: boolean
+  indexAgeHours?: number
 }
 
 let nextReq = 1
@@ -47,32 +55,57 @@ export async function startSearch(wc: WebContents, req: SearchRequest): Promise<
   const reqId = nextReq++
   const job: SearchJob = {
     reqId, wc, cancelled: false, finished: false,
-    batch: [], seen: new Set(), count: 0,
+    batch: [], seen: new Set(), count: 0, source: 'walk',
   }
   jobs.set(reqId, job)
-  job.flushTimer = setInterval(() => { if (job.batch.length) flush(job) }, FLUSH_MS)
+  job.flushTimer = setInterval(() => {
+    // liveness FIRST: flush() used to be the only place a destroyed window was
+    // noticed, and it is only reached when there is something to send — so a
+    // search that has not matched anything yet (the slow, expensive kind) ran
+    // the whole tree, and its rg child with it, for a window that was gone.
+    if (job.wc.isDestroyed()) { job.cancelled = true; cleanup(job); return }
+    if (job.batch.length) flush(job)
+  }, FLUSH_MS)
 
   void (async () => {
-    const useIndex = searchUsesIndex(req.root, req.showHidden)
-    const tasks: Promise<void>[] = [
-      useIndex ? fromIndex(job, req) : walk(job, req, makeMatcher(req.query)),
-    ]
-    if (req.contents && req.query) {
-      const caps = getCapabilities()
-      if (caps && !caps.ripgrep) {
-        job.error = 'Content search needs ripgrep (rg). Install it for your distro, then restart LiqExplorer.'
-      } else {
-        tasks.push(runRipgrep(job, req))
-      }
-    }
+    const tasks: Promise<void>[] = [runNameSearch(job, req)]
+    // finder:// has no tree to grep and rg would be handed a URI
+    if (req.contents && req.query && req.root !== FINDER_URI) tasks.push(runRipgrep(job, req))
     await Promise.allSettled(tasks)
     finish(job)
     // the index answered from a snapshot: quietly re-scan when it is stale so
     // the next search sees today's tree (no-op when refresh is set to manual)
-    if (useIndex) refreshIfStale()
+    if (job.source === 'index') refreshIfStale()
   })()
 
   return reqId
+}
+
+/**
+ * Pick a name source and run it: FileFinder -> local index -> live walk, each
+ * falling through only on "could not answer" (null), never on "answered, no
+ * hits" ([]).
+ *
+ * Order is deliberate. FileFinder goes first ONLY on a remote path — that is the
+ * case it exists for, where the local index cannot cheaply build coverage. On a
+ * local disk the local index wins: the user configured it, it honours
+ * indexExcludes, and refreshIfStale keeps it fresher than a LAN snapshot.
+ */
+async function runNameSearch(job: SearchJob, req: SearchRequest): Promise<void> {
+  const wholeIndex = req.root === FINDER_URI
+  // "Search this folder directly" from the results banner: the point is to
+  // bypass every snapshot, so no index gets a turn — except finder://, which is
+  // nothing but the index and has no tree to walk.
+  const live = !!req.live && !wholeIndex
+  const ffFirst = !live && ffEnabled() && (wholeIndex || isRemotePath(req.root))
+
+  if (ffFirst && await fromFileFinder(job, req)) return
+  if (!live && !wholeIndex && searchUsesIndex(req.root, req.showHidden) && await fromIndex(job, req)) return
+  // a whole-index search has no tree to fall back to — an empty answer with the
+  // banner explaining why beats walking something that was never asked for
+  if (wholeIndex) { job.source = 'filefinder'; return }
+  job.source = 'walk'
+  await walk(job, req, makeMatcher(req.query))
 }
 
 /**
@@ -96,7 +129,6 @@ export function cancelSearch(reqId: number): void {
   const job = jobs.get(reqId)
   if (!job) return
   job.cancelled = true
-  try { job.rg?.kill() } catch { /* already exited */ }
   cleanup(job)
 }
 
@@ -104,6 +136,13 @@ export function cancelSearch(reqId: number): void {
 
 function cleanup(job: SearchJob): void {
   if (job.flushTimer) { clearInterval(job.flushTimer); job.flushTimer = undefined }
+  // every way a job ends goes through here, so this is the one place that can
+  // promise the child dies with it — rg outlives cancel/window-close otherwise
+  // and keeps scanning a CIFS tree for minutes with nobody left to read it
+  try { job.rg?.kill() } catch { /* already exited */ }
+  // same promise for the HTTP request: a cancelled search must not leave a
+  // socket and a 6s timer alive against a host that may be gone
+  try { job.abort?.abort() } catch { /* already settled */ }
   jobs.delete(job.reqId)
 }
 
@@ -115,7 +154,14 @@ function flush(job: SearchJob, done = false): void {
     entries: job.batch.splice(0, job.batch.length),
     done,
   }
-  if (done && job.error) chunk.error = job.error
+  if (done) {
+    if (job.error) chunk.error = job.error
+    chunk.source = job.source
+    // either the server capped its page or we hit our own ceiling; both mean
+    // "this is not the whole answer" and the results view has to say so
+    chunk.truncated = job.truncated || job.count >= MAX_RESULTS
+    if (job.indexAgeHours !== undefined) chunk.indexAgeHours = job.indexAgeHours
+  }
   job.wc.send(PUSH.searchChunk, chunk)
 }
 
@@ -169,11 +215,16 @@ async function addResult(job: SearchJob, dir: string, name: string): Promise<voi
 /**
  * Answer from the index. Same streaming contract as the walker: entries land in
  * the same batch/dedupe set, so ripgrep hits merge in and the 10k cap applies
- * unchanged. Falls back to the live walk when the index turns out to be
- * unusable (cleared between the check and the read, unreadable file, ...).
+ * unchanged.
+ *
+ * The fallback hangs on indexSearch's null/[] distinction, NOT on the result
+ * being empty: null means the index could not answer (cleared between the check
+ * and the read, db missing or unreadable, root not really covered) and the tree
+ * must be walked live. Treating "no rows" as an answer is how a folder full of
+ * matches came back as a confident "No items match your search".
  */
-async function fromIndex(job: SearchJob, req: SearchRequest): Promise<void> {
-  let hits: FileEntry[]
+async function fromIndex(job: SearchJob, req: SearchRequest): Promise<boolean> {
+  let hits: FileEntry[] | null
   try {
     hits = await indexSearch(req.query, {
       root: req.root,
@@ -181,18 +232,72 @@ async function fromIndex(job: SearchJob, req: SearchRequest): Promise<void> {
       showHidden: req.showHidden,
       limit: MAX_RESULTS,
     })
-  } catch { hits = [] }
-  if (job.cancelled) return
-  if (!hits.length && !indexCovers(req.root)) {
-    await walk(job, req, makeMatcher(req.query))
-    return
-  }
+  } catch { hits = null }
+  if (job.cancelled) return true
+  if (hits === null) return false
+  job.source = 'index'
+  await drain(job, hits)
+  return true
+}
+
+/** push entries with a yield every so often so the flush timer can breathe */
+async function drain(job: SearchJob, hits: FileEntry[]): Promise<void> {
   for (let i = 0; i < hits.length; i++) {
     if (job.cancelled || job.count >= MAX_RESULTS) break
     addEntry(job, hits[i])
-    // let the flush timer / renderer breathe on very large result sets
     if ((i & 1023) === 1023) await new Promise<void>(res => setImmediate(res))
   }
+}
+
+// ---------------------------------------------------------------- FileFinder
+
+/**
+ * Answer from the LAN index. Same null contract as fromIndex.
+ *
+ * The two filters below are not optional. The server's `q` goes into a SQL LIKE
+ * with '%' and '_' left live, so it returns a SUPERSET of what this app means by
+ * the query — nameMatcher puts that back. And it indexes dotfiles
+ * unconditionally, while both other sources never descend into a dot directory;
+ * hiddenBelow reproduces that rule rather than restating it.
+ */
+async function fromFileFinder(job: SearchJob, req: SearchRequest): Promise<boolean> {
+  const wholeIndex = req.root === FINDER_URI
+  job.abort = new AbortController()
+  let res
+  try {
+    res = await ffSearch(req.query, {
+      root: wholeIndex ? null : req.root,
+      subfolders: req.subfolders,
+      limit: PAGE_LIMIT,
+      signal: job.abort.signal,
+    })
+  } catch { res = null } finally { job.abort = undefined }
+  if (job.cancelled) return true
+  if (!res) return false
+
+  const match = makeMatcher(req.query)
+  const kept: FileEntry[] = []
+  for (const row of res.rows) {
+    if (!match(row.entry.name)) continue
+    if (!req.showHidden) {
+      if (row.entry.hidden) continue
+      const slash = row.entry.path.lastIndexOf('/')
+      const dir = slash <= 0 ? '/' : row.entry.path.slice(0, slash)
+      // whole-index results span several mounts, so there is no single search
+      // root to measure from — '/' works because no mount path here has a dot
+      // segment of its own
+      if (hiddenBelow(dir, wholeIndex ? '/' : req.root)) continue
+    }
+    kept.push(row.entry)
+  }
+
+  job.source = 'filefinder'
+  // the server capped BEFORE these filters ran, so a truncated page that loses
+  // rows here is doubly incomplete — the banner has to say so either way
+  job.truncated = res.truncated
+  job.indexAgeHours = res.ageHours
+  await drain(job, kept)
+  return true
 }
 
 // ---------------------------------------------------------------- name walker

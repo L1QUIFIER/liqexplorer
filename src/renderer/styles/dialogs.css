@@ -414,10 +414,12 @@
 
 .ops-card {
   width: 320px;
-  background: var(--bg-flyout);
-  border: 1px solid var(--stroke);
+  /* floats over the file list with no scrim — same treatment as the drop bins */
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-flyout);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
   padding: 12px 14px;
   font-size: var(--fs-body);
   animation: dlg-in 150ms ease-out;
@@ -503,6 +505,9 @@
   font-size: var(--fs-caption);
   color: var(--text-primary);
   overflow: hidden;
+  /* without this a long file name is sliced mid-character with no sign that
+     anything is missing — the one place the progress dialog names a file */
+  text-overflow: ellipsis;
   white-space: nowrap;
   margin-bottom: 4px;
 }
@@ -571,3 +576,122 @@
   margin-top: 8px;
 }
 .ops-extra-buttons .btn { height: 28px; min-width: 72px; }
+
+/* bulk rename */
+.brn-body { display: flex; flex-direction: column; gap: 10px; }
+.brn-form { display: flex; flex-direction: column; gap: 8px; }
+.brn-field { display: flex; align-items: center; gap: 8px; }
+.brn-label { width: 110px; flex: none; color: var(--text-secondary); }
+.brn-num .dlg-input { width: 90px; }
+.brn-opts { display: flex; gap: 14px; flex-wrap: wrap; }
+.brn-hint { color: var(--text-secondary); font-size: var(--fs-caption, 12px); }
+.brn-summary { color: var(--text-secondary); }
+.brn-summary.has-problems { color: var(--danger); }
+.brn-list {
+  max-height: 260px; overflow: auto;
+  border: 1px solid var(--stroke); border-radius: var(--radius);
+  background: var(--bg-layer);
+}
+.brn-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
+.brn-row + .brn-row { border-top: 1px solid var(--stroke); }
+.brn-old, .brn-new { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brn-arrow { color: var(--text-secondary); flex: none; }
+.brn-row.is-same { opacity: 0.55; }
+.brn-row.is-bad .brn-new { color: var(--danger); }
+
+/* change folder icon */
+.fi-body { max-height: 340px; overflow: auto; }
+.fi-grid { display: grid; grid-template-columns: repeat(auto-fill, 64px); gap: 6px; }
+.fi-tile {
+  width: 64px; height: 64px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius);
+  transition: background-color var(--dur-fast) var(--ease-fluent);
+}
+.fi-tile:hover { background: var(--bg-hover); }
+.fi-tile:active { background: var(--bg-press); }
+.fi-tile.selected { background: var(--bg-selected); border-color: var(--selected-stroke, var(--accent)); }
+
+/* ---------------------------------------------------------- activity history */
+.dlg-history .hist-body { padding: 0; }
+.hist-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.hist-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm, 4px);
+}
+.hist-row.clickable { cursor: default; }
+.hist-row.clickable:hover { background: var(--bg-hover); }
+.hist-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.hist-icon { flex: none; margin-top: 2px; }
+.hist-main { flex: 1 1 auto; min-width: 0; }
+.hist-what {
+  font-size: 13px;
+  /* long names must not push the timestamp off the dialog */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-row.bad .hist-what { color: var(--text-danger, #c42b1c); }
+.hist-where {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-when {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding-top: 1px;
+  white-space: nowrap;
+}
+.hist-empty { padding: 28px 16px; text-align: center; }
+.hist-empty-title { font-size: 13px; margin-bottom: 4px; }
+.hist-empty-sub { font-size: 12px; color: var(--text-secondary); }
+.hist-foot .hist-note {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+  align-self: center;
+}
+
+/* ---------------------------------------------------------- Extract wizard */
+.dlg-extract .ex-body { padding: 4px 2px 8px; }
+.dlg-extract .ex-head { font-size: var(--fs-subtitle); font-weight: 600; margin-bottom: 12px; }
+.dlg-extract .ex-label { color: var(--text-secondary); font-size: var(--fs-caption); margin-bottom: 4px; }
+.dlg-extract .ex-destrow { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.dlg-extract .ex-dest {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  /* a long path must not stretch the dialog; the end is the informative part */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.dlg-extract .ex-check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: baseline;
+  margin: 8px 0;
+  cursor: pointer;
+}
+.dlg-extract .ex-hint {
+  grid-column: 2;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}

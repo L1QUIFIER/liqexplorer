@@ -13,7 +13,6 @@ export const HEADER_H = 32
 const PAD_LEFT = 12
 const MIN_W = 60
 const MAX_FIT_W = 600
-const SEARCH_COL_W = 240
 
 /** Name pinned first, exactly once. */
 export function normalizedColumns(cols: ColumnSpec[]): ColumnSpec[] {
@@ -29,13 +28,24 @@ export function detailsTotalWidth(cols: DetailCol[]): number {
 
 const DEFAULT_W: Partial<Record<SortKey, number>> = {
   name: 300, mtime: 160, ctime: 160, atime: 160, type: 140, size: 100, ext: 90,
-  origPath: 260, deletedAt: 160,
+  origPath: 260, deletedAt: 160, rating: 90,
 }
 
 export interface HeaderHost {
   tab(): Tab | null
   checkboxes(): boolean
   searchMode(): boolean
+  /**
+   * The columns the ROWS are actually drawn with.
+   *
+   * Not the same as viewState.columns: the view host injects extra columns for
+   * particular locations — 'Folder path' in search results, 'Original location'
+   * and 'Date deleted' in the Recycle Bin — because they are meaningless
+   * elsewhere and must not persist into the next folder. The header used to
+   * re-derive its own list from viewState.columns and so never showed them,
+   * which left every heading sitting over the wrong column of data.
+   */
+  effectiveCols(): DetailCol[]
   showExt(): boolean
   /** currently painted entries (fit-to-visible-content measures these) */
   sampleEntries(): FileEntry[]
@@ -85,13 +95,14 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
     const t = host.tab()
     if (!t) return
     const vs = t.viewState
-    const cols = normalizedColumns(vs.columns)
+    const cols = host.effectiveCols()
     el.innerHTML = ''
     let total = PAD_LEFT + 8
     cols.forEach((c, ci) => {
       const cell = document.createElement('div')
-      cell.className = 'vh-hcell'
-      cell.dataset.key = c.key
+      // synthetic columns keep the class the drag/resize code already excludes
+      cell.className = c.synthetic ? 'vh-hcell vh-hsyn' : 'vh-hcell'
+      if (!c.synthetic) cell.dataset.key = c.key
       cell.style.width = c.width + 'px'
       total += c.width
       if (ci === 0 && host.checkboxes()) {
@@ -99,7 +110,7 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
         mc.className = 'vh-check vh-master'
         cell.appendChild(mc)
       }
-      if (vs.sortKey === c.key) {
+      if (!c.synthetic && vs.sortKey === c.key) {
         const g = document.createElement('span')
         g.className = 'vh-hsort'
         g.textContent = vs.sortDir === 'asc' ? '▲' : '▼'
@@ -107,21 +118,17 @@ export function createDetailsHeader(host: HeaderHost): DetailsHeader {
       }
       const lb = document.createElement('span')
       lb.className = 'vh-htext'
-      lb.textContent = COLUMN_LABELS[c.key] ?? c.key
+      lb.textContent = c.label || COLUMN_LABELS[c.key] || c.key
       cell.appendChild(lb)
-      const dv = document.createElement('div')
-      dv.className = 'vh-hdiv'
-      dv.dataset.key = c.key
-      cell.appendChild(dv)
-      el.appendChild(cell)
-      if (ci === 0 && host.searchMode()) {
-        const sc = document.createElement('div')
-        sc.className = 'vh-hcell vh-hsyn'
-        sc.style.width = SEARCH_COL_W + 'px'
-        sc.innerHTML = '<span class="vh-htext">Folder path</span>'
-        el.appendChild(sc)
-        total += SEARCH_COL_W
+      // no divider on a synthetic column: dragging it would resize something
+      // that is never saved
+      if (!c.synthetic) {
+        const dv = document.createElement('div')
+        dv.className = 'vh-hdiv'
+        dv.dataset.key = c.key
+        cell.appendChild(dv)
       }
+      el.appendChild(cell)
     })
     el.style.width = total + 'px'
     syncCheck()

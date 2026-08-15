@@ -10,12 +10,14 @@ const SVG_MAX = '<svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y
 const SVG_RESTORE = '<svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="2.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1" fill="none"/><path d="M2.5 2.5V2a1.5 1.5 0 0 1 1.5-1.5H8A1.5 1.5 0 0 1 9.5 2v4A1.5 1.5 0 0 1 8 7.5h-.5" stroke="currentColor" stroke-width="1" fill="none"/></svg>'
 const SVG_CLOSE = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-width="1" fill="none"/></svg>'
 const SVG_TAB_CLOSE = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.1" fill="none"/></svg>'
+const SVG_PIN = '<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9.6 1.7a1 1 0 0 1 1.42 0l3.28 3.28a1 1 0 0 1 0 1.42l-.9.9a1 1 0 0 1-.93.27l-.66-.15-2.28 2.28.3 2.35a1 1 0 0 1-.28.83l-.33.33a1 1 0 0 1-1.41 0L5.6 11l-3.42 3.42a.6.6 0 0 1-.85-.85L4.75 10.2 2.54 7.99a1 1 0 0 1 0-1.41l.33-.33a1 1 0 0 1 .83-.29l2.35.31L8.33 3.99l-.15-.66a1 1 0 0 1 .27-.93l1.15-.7z"/></svg>'
 const SVG_PLUS = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>'
 
 function tabIconName(t: Tab): string {
   if (t.path === 'home://') return 'go-home,user-home,folder-home,folder'
   if (t.path === 'computer://') return 'computer,drive-harddisk,folder'
   if (t.path === 'trash://') return 'user-trash,folder'
+  if (t.path === 'starred://') return 'starred,emblem-favorite,bookmarks,folder'
   if (t.path === app.homePath) return 'user-home,folder-home,folder'
   return 'folder'
 }
@@ -66,10 +68,18 @@ export function mountTitlebar(root: HTMLElement): void {
   // ---- tab reorder helpers ----
   function moveTab(from: number, to: number): void {
     if (from === to || from < 0 || to < 0) return
-    const active = app.activeTab
+    // pinned tabs hold the front of the strip; a drag may reorder within a
+    // group but never across the boundary, or the pinned block would break up
+    const pinnedCount = app.tabs.filter(t => t.pinned).length
+    if (app.tabs[from]?.pinned) { if (to >= pinnedCount) to = pinnedCount - 1 }
+    else if (to < pinnedCount) to = pinnedCount
+    // activePrimary, NOT activeTab: with a dual pane open activeTab resolves to
+    // the focused pane, which never appears in app.tabs — indexOf would be -1
+    const active = app.activePrimary
     const [t] = app.tabs.splice(from, 1)
     app.tabs.splice(to, 0, t)
-    app.activeTabIndex = app.tabs.indexOf(active)
+    const at = active ? app.tabs.indexOf(active) : -1
+    if (at >= 0) app.activeTabIndex = at
     app.emit('tabs-changed')
   }
 
@@ -140,10 +150,10 @@ export function mountTitlebar(root: HTMLElement): void {
     list.innerHTML = ''
     app.tabs.forEach((t, i) => {
       const el = document.createElement('div')
-      el.className = 'tb-tab' + (i === app.activeTabIndex ? ' active' : '')
+      el.className = 'tb-tab' + (i === app.activeTabIndex ? ' active' : '') + (t.pinned ? ' pinned' : '')
       el.setAttribute('role', 'tab')
       el.setAttribute('aria-selected', String(i === app.activeTabIndex))
-      el.title = t.path
+      el.title = t.pinned ? `${t.title || '…'}\n${t.path}` : t.path
 
       const ic = document.createElement('img')
       ic.className = 'tb-tab-icon'
@@ -156,13 +166,25 @@ export function mountTitlebar(root: HTMLElement): void {
       label.textContent = t.title || '…'
       el.appendChild(label)
 
-      const close = document.createElement('button')
-      close.className = 'tb-tab-close'
-      close.title = 'Close tab (Ctrl+W)'
-      close.setAttribute('aria-label', 'Close tab')
-      close.innerHTML = SVG_TAB_CLOSE
-      close.addEventListener('click', (e) => { e.stopPropagation(); app.closeTab(i) })
-      el.appendChild(close)
+      if (t.pinned) {
+        // a pinned tab shows the pin where the ✕ would be: it is both the
+        // reason the tab has no close button and the way to give it one back
+        const pin = document.createElement('button')
+        pin.className = 'tb-tab-pin'
+        pin.title = 'Unpin tab'
+        pin.setAttribute('aria-label', 'Unpin tab')
+        pin.innerHTML = SVG_PIN
+        pin.addEventListener('click', (e) => { e.stopPropagation(); app.setTabPinned(i, false) })
+        el.appendChild(pin)
+      } else {
+        const close = document.createElement('button')
+        close.className = 'tb-tab-close'
+        close.title = 'Close tab (Ctrl+W)'
+        close.setAttribute('aria-label', 'Close tab')
+        close.innerHTML = SVG_TAB_CLOSE
+        close.addEventListener('click', (e) => { e.stopPropagation(); app.closeTab(i, true) })
+        el.appendChild(close)
+      }
 
       el.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || (e.target as HTMLElement).closest('.tb-tab-close')) return
@@ -170,7 +192,7 @@ export function mountTitlebar(root: HTMLElement): void {
         window.addEventListener('pointermove', onPointerMove)
         window.addEventListener('pointerup', onPointerUp)
       })
-      el.addEventListener('auxclick', (e) => { if (e.button === 1) app.closeTab(i) })
+      el.addEventListener('auxclick', (e) => { if (e.button === 1) app.closeTab(i) })  // pinned tabs refuse
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault()
         app.emit('tab-context', { x: e.clientX, y: e.clientY, index: i })

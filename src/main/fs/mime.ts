@@ -9,6 +9,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { customFolderIcon } from '../platform/foldericons'
 
 interface GlobEntry {
   mime: string
@@ -270,6 +271,9 @@ function specialFolders(): Map<string, string> {
 
 /** icon names for a directory: special XDG folders get their own icon, else 'folder'. */
 export function folderIcons(dirPath: string): string[] {
+  // a user-chosen icon wins over the special-folder mapping
+  const custom = customFolderIcon(dirPath)
+  if (custom) return [custom, 'folder']
   const norm = dirPath.replace(/\/+$/, '') || '/'
   const special = specialFolders().get(norm)
   return special ? [special, 'folder'] : ['folder']

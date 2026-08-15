@@ -1,6 +1,7 @@
 // Natural sorting + grouping shared by renderer and main.
 // Explorer semantics: case-insensitive, digit runs compared numerically.
 import type { FileEntry, FolderViewState, SortKey } from './types'
+import { ratingBucket } from './ratings'
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base', usage: 'sort' })
 
@@ -21,6 +22,7 @@ const GENERAL_SORT_KEYS: SortKeyInfo[] = [
   { key: 'type', label: 'Type' },
   { key: 'size', label: 'Size' },
   { key: 'ext', label: 'File extension' },
+  { key: 'rating', label: 'Rating' },
 ]
 
 const TRASH_SORT_KEYS: SortKeyInfo[] = [
@@ -56,6 +58,10 @@ function keyValue(e: FileEntry, key: SortKey): string | number {
     case 'ext': return e.ext
     case 'origPath': return e.trashOrigPath ?? ''
     case 'deletedAt': return e.trashDeletedAt ?? 0
+    // folders sort below unrated files, as they do for 'size' — otherwise a
+    // folder lands in the middle of the unrated run and splits the "Unrated"
+    // group in two when grouping by rating
+    case 'rating': return e.isDir ? -1 : e.rating ?? 0
     default: return e.name
   }
 }
@@ -63,7 +69,15 @@ function keyValue(e: FileEntry, key: SortKey): string | number {
 export function sortEntries(entries: FileEntry[], vs: FolderViewState, foldersFirst: boolean): FileEntry[] {
   const dir = vs.sortDir === 'asc' ? 1 : -1
   const key = vs.sortKey
-  const sorted = [...entries].sort((a, b) => {
+  // The rating filter rides here rather than in the caller because this is the
+  // one function every listing passes through on its way to Tab.rows, so the
+  // item count, Select all, the master checkbox and the status bar all agree
+  // about what is on screen without any of them knowing the filter exists.
+  // Folders are never hidden by it — a filtered folder you cannot open is a
+  // trap, and folders cannot be rated.
+  const min = vs.minRating ?? 0
+  const src = min > 0 ? entries.filter(e => e.isDir || (e.rating ?? 0) >= min) : entries
+  const sorted = [...src].sort((a, b) => {
     if (foldersFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1
     const va = keyValue(a, key), vb = keyValue(b, key)
     let c: number
@@ -129,12 +143,26 @@ export function groupLabelFor(e: FileEntry, vs: FolderViewState): string {
     case 'size': return e.isDir ? 'Folders' : sizeBucket(e.size)
     case 'type': return typeLabelFor(e)
     case 'ext': return e.ext ? e.ext.toUpperCase() : 'None'
+    case 'rating': return e.isDir ? 'Folders' : ratingBucket(e.rating ?? 0)
     default: return ''
   }
 }
 
 /** entries must already be sorted with group keys adjacent (sort by groupKey first when grouping) */
 export function computeGroups(entries: FileEntry[], vs: FolderViewState): Group[] {
+  // computer:// carries its own sections and is grouped whatever the view state
+  // says, the way Explorer's This PC always shows Folders / Devices and drives
+  // / Network locations. The rows arrive already in section order.
+  if (entries.some(e => e.section)) {
+    const out: Group[] = []
+    let cur: Group | null = null
+    entries.forEach((e, i) => {
+      const label = e.section ?? ''
+      if (!cur || cur.label !== label) { cur = { label, start: i, count: 1 }; out.push(cur) }
+      else cur.count++
+    })
+    return out
+  }
   if (vs.groupKey === 'none') return []
   const groups: Group[] = []
   let cur: Group | null = null

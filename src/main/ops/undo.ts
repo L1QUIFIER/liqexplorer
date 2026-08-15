@@ -11,10 +11,12 @@
 // successful completion of recordable ops; quick.ts records rename/newFolder/
 // newFile. PUSH.undoChanged is broadcast on every stack change.
 import { PUSH } from '../../shared/ipc'
-import type { UndoInfo } from '../../shared/types'
+import type { OpRequest, UndoInfo } from '../../shared/types'
 import { broadcast } from '../windows'
 import * as engine from './engine'
+import type { MovePair } from './engine'
 import * as trash from '../platform/trash'
+
 
 export interface UndoEntry {
   kind: 'move' | 'rename' | 'copy' | 'trash' | 'mkdir' | 'mkfile' | 'symlink'
@@ -38,9 +40,22 @@ const VERBS: Record<UndoEntry['kind'], string> = {
   symlink: 'Create Shortcut',
 }
 
+/** the file a single-item entry acted on, for the label */
+function soleName(e: UndoEntry): string | null {
+  const one = (a?: string[]): string | undefined => (a?.length === 1 ? a[0] : undefined)
+  const p = one(e.trashed) ?? one(e.created) ?? (e.pairs?.length === 1 ? e.pairs[0].to : undefined)
+  if (!p) return null
+  const name = p.slice(p.lastIndexOf('/') + 1)
+  return name || null
+}
+
 function label(e: UndoEntry | undefined): string | null {
   if (!e) return null
-  return e.count > 1 ? `${VERBS[e.kind]} (${e.count} items)` : VERBS[e.kind]
+  if (e.count > 1) return `${VERBS[e.kind]} (${e.count} items)`
+  // naming the file matters most exactly where the menu is hardest to reach —
+  // fullscreen in the media viewer, where Delete is one keystroke away
+  const name = soleName(e)
+  return name ? `${VERBS[e.kind]} ${name}` : VERBS[e.kind]
 }
 
 export function getUndoInfo(): UndoInfo {
@@ -70,11 +85,13 @@ export async function doUndo(): Promise<void> {
     // A failed/partial inverse must NOT become a redo entry: the op row keeps
     // the error, and offering "Redo" for work that never reverted corrupts
     // history — drop the entry instead.
+    replayVia = 'undo'
     if (await applyInverse(e)) {
       redoStack.push(e)
       if (redoStack.length > CAP) redoStack.shift()
     }
   } finally {
+    replayVia = undefined
     busy = false
     changed()
   }
@@ -87,11 +104,13 @@ export async function doRedo(): Promise<void> {
   busy = true
   try {
     // same rule as doUndo: a failed replay never re-enters the undo stack
+    replayVia = 'redo'
     if (await applyForward(e)) {
       undoStack.push(e)
       if (undoStack.length > CAP) undoStack.shift()
     }
   } finally {
+    replayVia = undefined
     busy = false
     changed()
   }
@@ -99,23 +118,34 @@ export async function doRedo(): Promise<void> {
 
 const ok = (r: engine.OpResult): boolean => r.status === 'done' && r.failureCount === 0
 
+/**
+ * Which replay is running, for the activity log. The engine tags whatever the
+ * inverse actually did — the direction of a reverted move, the delete that
+ * undoes a copy — instead of this module guessing at it. Safe as module state
+ * because `busy` lets only one replay run at a time.
+ */
+let replayVia: 'undo' | 'redo' | undefined
+
+const replay = (req: OpRequest, pairs?: MovePair[]) =>
+  engine.runInternal(req, pairs, replayVia)
+
 /** Runs the inverse op. False when it failed, was cancelled, or applied partially. */
 async function applyInverse(e: UndoEntry): Promise<boolean> {
   switch (e.kind) {
     case 'move': {
       const inv = (e.pairs ?? []).map(p => ({ from: p.to, to: p.from })).reverse()
       if (!inv.length) return true
-      return ok(await engine.runInternal({ kind: 'move', sources: inv.map(p => p.from) }, inv))
+      return ok(await replay({ kind: 'move', sources: inv.map(p => p.from) }, inv))
     }
     case 'rename': {
       const p = e.pairs?.[0]
       if (!p) return true
-      return ok(await engine.runInternal({ kind: 'rename', sources: [p.to], dest: p.from }))
+      return ok(await replay({ kind: 'rename', sources: [p.to], dest: p.from }))
     }
     case 'copy':
       // undoing a copy deletes the copies (Explorer semantics — permanent)
       if (!e.created?.length) return true
-      return ok(await engine.runInternal({ kind: 'delete', sources: e.created }))
+      return ok(await replay({ kind: 'delete', sources: e.created }))
     case 'trash': {
       const want = e.trashed?.length ?? 0
       if (!want) return true
@@ -123,14 +153,14 @@ async function applyInverse(e: UndoEntry): Promise<boolean> {
       // a subset is a partial undo, so require full coverage
       const uris = await trash.urisForOrigPaths(e.trashed ?? [])
       if (!uris.length) return false
-      const r = await engine.runInternal({ kind: 'restoreTrash', sources: uris })
+      const r = await replay({ kind: 'restoreTrash', sources: uris })
       return uris.length === want && ok(r)
     }
     case 'mkdir':
     case 'mkfile':
     case 'symlink':
       if (!e.created?.length) return true
-      return ok(await engine.runInternal({ kind: 'delete', sources: e.created }))
+      return ok(await replay({ kind: 'delete', sources: e.created }))
   }
 }
 
@@ -138,23 +168,23 @@ async function applyForward(e: UndoEntry): Promise<boolean> {
   switch (e.kind) {
     case 'move':
       if (!e.pairs?.length) return true
-      return ok(await engine.runInternal({ kind: 'move', sources: e.pairs.map(p => p.from) }, e.pairs))
+      return ok(await replay({ kind: 'move', sources: e.pairs.map(p => p.from) }, e.pairs))
     case 'rename': {
       const p = e.pairs?.[0]
       if (!p) return true
-      return ok(await engine.runInternal({ kind: 'rename', sources: [p.from], dest: p.to }))
+      return ok(await replay({ kind: 'rename', sources: [p.from], dest: p.to }))
     }
     case 'copy':
       if (!e.pairs?.length) return true
-      return ok(await engine.runInternal({ kind: 'copy', sources: e.pairs.map(p => p.from) }, e.pairs))
+      return ok(await replay({ kind: 'copy', sources: e.pairs.map(p => p.from) }, e.pairs))
     case 'trash':
       if (!e.trashed?.length) return true
-      return ok(await engine.runInternal({ kind: 'trash', sources: e.trashed }))
+      return ok(await replay({ kind: 'trash', sources: e.trashed }))
     case 'mkdir':
     case 'mkfile': {
       let all = true
       for (const p of e.created ?? []) {
-        if (!ok(await engine.runInternal({ kind: e.kind, sources: [], dest: p }))) all = false
+        if (!ok(await replay({ kind: e.kind, sources: [], dest: p }))) all = false
       }
       return all
     }
@@ -162,7 +192,7 @@ async function applyForward(e: UndoEntry): Promise<boolean> {
       // dest is the full link path, so each link is recreated exactly where it was
       let all = true
       for (const p of e.pairs ?? []) {
-        if (!ok(await engine.runInternal({ kind: 'symlink', sources: [p.from], dest: p.to }))) all = false
+        if (!ok(await replay({ kind: 'symlink', sources: [p.from], dest: p.to }))) all = false
       }
       return all
     }

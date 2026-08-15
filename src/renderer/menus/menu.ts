@@ -200,11 +200,34 @@ function iconEl(spec: string): HTMLElement {
 
 // ---------- positioning ----------
 
-function positionRoot(el: HTMLElement, opts: MenuOptions): void {
+export interface FlyoutPlacement {
+  /** pointer position, used when anchorEl is absent */
+  x: number
+  y: number
+  /** anchor: the flyout opens below it and flips above when it does not fit */
+  anchorEl?: HTMLElement | null
+  /** pointer mode: gap from the point, so the box is not under the cursor */
+  dx?: number
+  dy?: number
+  /** pointer mode: when it does not fit to the right, put it LEFT of the point
+   *  instead of clamping to the viewport edge (a peek popover must not cover
+   *  the item it is describing; a menu is happy clamped, so menus omit this) */
+  flipX?: boolean
+}
+
+/**
+ * Fixed-position a flyout inside the viewport: clamp to the edges, flip upward
+ * when there is no room below. Shared by the menu framework and the peek
+ * popover — the "opens off the bottom of the screen" bug only has to be fixed
+ * in one place. Returns true when the box had to open upward.
+ */
+export function placeFlyout(el: HTMLElement, opts: FlyoutPlacement): boolean {
   const w = el.offsetWidth
   const h = el.offsetHeight
-  let x = opts.x
-  let y = opts.y
+  const dx = opts.dx ?? 0
+  const dy = opts.dy ?? 0
+  let x = opts.x + dx
+  let y = opts.y + dy
   let up = false
   let anchorRect: DOMRect | null = null
   if (opts.anchorEl) {
@@ -213,7 +236,9 @@ function positionRoot(el: HTMLElement, opts: MenuOptions): void {
     y = anchorRect.bottom + 4
   }
   if (x + w > innerWidth - EDGE) {
-    x = anchorRect ? Math.max(EDGE, anchorRect.right - w) : Math.max(EDGE, innerWidth - EDGE - w)
+    if (anchorRect) x = Math.max(EDGE, anchorRect.right - w)
+    else if (opts.flipX && opts.x - dx - w >= EDGE) x = opts.x - dx - w
+    else x = Math.max(EDGE, innerWidth - EDGE - w)
   }
   if (x < EDGE) x = EDGE
   if (y + h > innerHeight - EDGE) {
@@ -222,14 +247,19 @@ function positionRoot(el: HTMLElement, opts: MenuOptions): void {
       if (above >= EDGE) { y = above; up = true }
       else y = Math.max(EDGE, innerHeight - EDGE - h)
     } else {
-      // pointer menu: open upward, bottom edge at the cursor
+      // pointer flyout: open upward, bottom edge at the cursor
       up = true
-      y = Math.max(EDGE, opts.y - h)
+      y = Math.max(EDGE, opts.y - dy - h)
     }
   }
   el.style.left = `${Math.round(x)}px`
   el.style.top = `${Math.round(y)}px`
-  if (up) el.classList.add('menu--up')  // flips animation + moves icon row nearest the pointer
+  return up
+}
+
+function positionRoot(el: HTMLElement, opts: MenuOptions): void {
+  // flips animation + moves the icon row nearest the pointer
+  if (placeFlyout(el, opts)) el.classList.add('menu--up')
 }
 
 function positionSubmenu(el: HTMLElement, itemEl: HTMLElement): void {

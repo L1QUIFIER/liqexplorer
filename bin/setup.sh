@@ -8,9 +8,13 @@ cd "$PROJ"
 
 if ! command -v node >/dev/null || ! command -v npm >/dev/null; then
   echo "Need Node.js 20+ and npm on PATH." >&2
-  echo "Arch:   sudo pacman -S nodejs npm" >&2
+  echo "Arch:   sudo pacman -S git nodejs npm gvfs gtk3 python-gobject ripgrep p7zip unzip curl" >&2
   echo "Fedora: sudo dnf install nodejs npm" >&2
   echo "Debian: sudo apt install nodejs npm" >&2
+  exit 1
+fi
+if ! command -v curl >/dev/null || ! command -v unzip >/dev/null; then
+  echo "Need curl + unzip to download Electron (Arch: sudo pacman -S curl unzip)." >&2
   exit 1
 fi
 

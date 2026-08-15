@@ -33,9 +33,10 @@ Captured from a disposable demo profile (generic folders and stock-style photos 
 
 **Arch / Manjaro / EndeavourOS**
 ```bash
-sudo pacman -S nodejs npm gvfs gtk3 python-gobject ripgrep p7zip
+sudo pacman -S git nodejs npm gvfs gtk3 python-gobject ripgrep p7zip unzip curl
 # optional: unrar unarchiver udisks2 fuse2
 ```
+`unzip` + `curl` are required so Electron can be downloaded when npm’s install script skips it (common on npm 12).
 
 **Fedora**
 ```bash
@@ -54,17 +55,17 @@ Missing tools soft-fail (status bar warning + console log) instead of crashing �
 
 ## Try it (build from source)
 
-Use a **fresh clone of `main`** (or `git pull` if you already cloned — older checkouts are missing some scripts).
+Needs **internet once** (Electron binary download). Use a fresh clone of `main`.
 
 ```bash
 git clone https://github.com/L1QUIFIER/liqexplorer.git
 cd liqexplorer
-git pull origin main
 bash bin/setup.sh
 npm start
 ```
 
-`bin/setup.sh` runs `npm install`, approves Electron/esbuild install scripts on modern npm (11.16+ / 12 — common on Arch with new Node), downloads those binaries if they were skipped, then builds.
+`bin/setup.sh` runs `npm install`, approves Electron/esbuild install scripts on modern npm (11.16+ / 12 — common on Arch), downloads Electron (curl+unzip fallback if needed), then builds.
+
 
 Manual equivalent:
 

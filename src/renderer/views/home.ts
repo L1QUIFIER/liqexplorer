@@ -11,7 +11,8 @@ import { PUSH } from '../../shared/ipc'
 import { formatDate } from '../../shared/sort'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
-import { escapeHtml, iconURL } from './items'
+import { escapeHtml, iconURL, thumbURL, wantsThumb } from './items'
+import { attachPeek } from './peek'
 import { openInMediaViewer } from '../media/overlay'
 
 const RECENT_LIMIT = 25
@@ -83,6 +84,27 @@ function relTime(ms: number): string {
   return formatDate(ms)
 }
 
+/**
+ * Order a Home section by the tab's sort.
+ *
+ * Only the keys a Home entry can actually answer are honoured — it has a name
+ * and, for Recent, a time. Asking for "size" on a list of pinned folders has no
+ * answer, so it falls back to the name rather than shuffling them arbitrarily,
+ * which would look like a bug.
+ */
+function sortEntries<T extends { name: string; visitedAt?: number }>(
+  items: T[], key: string, desc: boolean,
+): T[] {
+  const out = items.slice()
+  out.sort((a, b) => {
+    let d = 0
+    if (key === 'mtime' || key === 'ctime' || key === 'atime') d = (a.visitedAt ?? 0) - (b.visitedAt ?? 0)
+    if (!d) d = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    return desc ? -d : d
+  })
+  return out
+}
+
 function navigate(path: string): void {
   void app.activeTab?.navigate(path)
 }
@@ -152,10 +174,35 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     ], { x: e.clientX, y: e.clientY })
   })
 
+  /**
+   * Hover peek works here too.
+   *
+   * Peek was attached only to the file view, so resting the pointer on a Home
+   * tile did nothing — the same feature, the same delay, silently absent on the
+   * page you land on. It needs a scroller, the tab, and a hit test from element
+   * to entry; Home can answer all three, and every tile already carries its path
+   * in `title` plus the flag saying whether it is a folder.
+   */
+  attachPeek({
+    scroller,
+    tab: () => myTab(),
+    entryFromEvent: (target) => {
+      const el = (target as HTMLElement | null)?.closest?.('[data-peek-path]') as HTMLElement | null
+      const path = el?.dataset.peekPath ?? ''
+      if (!path.startsWith('/')) return null
+      const name = path.slice(path.lastIndexOf('/') + 1) || path
+      return synthEntry(path, name, undefined, el!.dataset.peekDir === '1')
+    },
+    onActivate: opts.onActivate,
+  })
+
   const sectionState = loadSectionState()
   let places: Place[] = app.places ?? []
   let favorites: FavoriteEntry[] = []
   let recents: RecentEntry[] = []
+  /** the tab's sort, applied to each section — Home used to ignore it */
+  let sortKey: string = 'mtime'
+  let sortDesc = true
   let dataGen = 0
   let lastRefreshAt = 0
 
@@ -245,14 +292,14 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
    * decision, so a synthesised entry answers the question correctly without a
    * stat per tile on a page that may be showing a dead network mount.
    */
-  function synthEntry(p: string, name: string, known?: string): FileEntry {
-    const mime = known && known !== 'application/octet-stream' ? known : mimeGuess(name)
+  function synthEntry(p: string, name: string, known?: string, isDir = false): FileEntry {
+    const mime = isDir ? 'inode/directory' : (known && known !== 'application/octet-stream' ? known : mimeGuess(name))
     return {
-      name, path: p, isDir: false, isSymlink: false,
+      name, path: p, isDir, isSymlink: false,
       size: -1, mtime: 0, ctime: 0, mime,
-      icons: iconsForMime(mime),
+      icons: isDir ? ['folder'] : iconsForMime(mime),
       hidden: name.startsWith('.'),
-      ext: (name.split('.').pop() ?? '').toLowerCase(),
+      ext: isDir ? '' : (name.split('.').pop() ?? '').toLowerCase(),
     }
   }
 
@@ -278,6 +325,11 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
 
   function wireItem(el: HTMLElement, o: ItemOpts): void {
     el.tabIndex = 0
+    // what hover peek reads. Set here rather than inferred from `title` or the
+    // tile classes, because Recent rows carry neither and a hit test that works
+    // for two sections out of three is worse than none.
+    el.dataset.peekPath = o.path
+    if (o.isDir) el.dataset.peekDir = '1'
     if (o.isDir) {
       // folders only: [data-liq-path] declares a right-drag DESTINATION
       el.dataset.liqPath = o.path
@@ -309,15 +361,42 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     })
   }
 
-  function makeTile(name: string, icons: string[], pinned: boolean): HTMLElement {
+  /**
+   * A tile's picture: the file's own thumbnail where there is one, otherwise
+   * the mime icon.
+   *
+   * Home only ever drew mime icons, so a folder of photos pinned to Favorites
+   * showed five identical green "image" glyphs — in Large icons, which is the
+   * mode you pick precisely to see the pictures. The file view has answered
+   * this since it was written (items.ts wantsThumb/thumbURL over liqthumb://);
+   * this is the same call, so Home shares the thumbnail cache rather than
+   * building a second one.
+   */
+  function paintTileImage(img: HTMLImageElement, name: string, icons: string[], size: number, file?: { path: string; mime?: string }): void {
+    const fallback = iconURL(icons, size)
+    const mode = myTab()?.viewState?.mode ?? 'tiles'
+    const entry = file ? synthEntry(file.path, name, file.mime) : null
+    const thumb = entry && wantsThumb(entry, mode) ? thumbURL(entry, mode) : ''
+    img.classList.toggle('is-thumb', !!thumb)
+    img.src = thumb || fallback
+    img.addEventListener('error', () => {
+      // no thumbnail (not an image after all, or the thumbnailer declined):
+      // fall back to the icon rather than leaving a hole
+      if (thumb && img.src !== fallback) {
+        img.classList.remove('is-thumb')
+        img.src = fallback
+      } else img.style.visibility = 'hidden'
+    })
+  }
+
+  function makeTile(name: string, icons: string[], pinned: boolean, file?: { path: string; mime?: string }): HTMLElement {
     const el = document.createElement('div')
     el.className = 'home-tile'
     const img = document.createElement('img')
     img.className = 'home-tile-icon'
     img.draggable = false
     img.alt = ''
-    img.src = iconURL(icons, TILE_ICON)
-    img.addEventListener('error', () => { img.style.visibility = 'hidden' })
+    paintTileImage(img, name, icons, TILE_ICON, file)
     const label = document.createElement('span')
     label.className = 'home-tile-name'
     label.textContent = name
@@ -398,7 +477,7 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
   function renderQuick(): void {
     const body = bodyOf(quickSec)
     body.textContent = ''
-    const items = quickItems()
+    const items = sortEntries(quickItems(), sortKey, sortDesc)
     setCount(quickSec, items.length)
     if (!items.length) {
       body.appendChild(emptyNote('Pin a folder to see it here.'))
@@ -456,23 +535,35 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
   function renderFavorites(): void {
     const body = bodyOf(favSec)
     body.textContent = ''
-    const files = favorites.filter(f => !f.isDir)
-    setCount(favSec, files.length)
-    if (!files.length) {
-      body.appendChild(emptyNote('Files you add to Favorites show up here.'))
+    // Folders belong here too. The store has always kept isDir and the "Add to
+    // Favorites" verb has always accepted a folder — this section simply threw
+    // them away on the way to the screen, so pinning a folder looked like it had
+    // silently failed. Folders first, the way a file listing orders them.
+    const items = sortEntries(favorites, sortKey, sortDesc)
+      .sort((a, b) => Number(!!b.isDir) - Number(!!a.isDir))
+    setCount(favSec, items.length)
+    if (!items.length) {
+      body.appendChild(emptyNote('Files and folders you add to Favorites show up here.'))
       return
     }
+    // only the files make a viewer playlist; a folder is not something ←/→ walks
+    const playable = items.filter(f => !f.isDir)
     const grid = document.createElement('div')
     grid.className = 'home-tiles'
-    for (const f of files) {
-      const tile = makeTile(f.name, iconsForMime(mimeGuess(f.name)), false)
-      tile.classList.add('home-tile-file')
+    for (const f of items) {
+      const tile = makeTile(
+        f.name,
+        f.isDir ? ['folder'] : iconsForMime(mimeGuess(f.name)),
+        false,
+        f.isDir ? undefined : { path: f.path },
+      )
+      tile.classList.add(f.isDir ? 'home-tile-dir' : 'home-tile-file')
       tile.title = f.path
       wireItem(tile, {
-        path: f.path, name: f.name, isDir: false, menu: fileMenu(f.path, 'favorite'),
+        path: f.path, name: f.name, isDir: !!f.isDir, menu: fileMenu(f.path, 'favorite'),
         // the rest of Favorites becomes the viewer's playlist, so ←/→ walks the
         // section the way it walks a folder
-        siblings: files.map(x => ({ path: x.path, name: x.name })),
+        siblings: playable.map(x => ({ path: x.path, name: x.name })),
       })
       grid.appendChild(tile)
     }
@@ -510,13 +601,14 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     body.textContent = ''
     recentSec.hidden = !app.settings.showRecent
     setCount(recentSec, recents.length)
+    const ordered = sortEntries(recents, sortKey, sortDesc)
     if (!recents.length) {
       body.appendChild(emptyNote('Files you open show up here.'))
       return
     }
     const list = document.createElement('div')
     list.className = 'home-list'
-    for (const r of recents) {
+    for (const r of ordered) {
       const row = document.createElement('div')
       row.className = 'home-row'
       const img = document.createElement('img')
@@ -524,8 +616,7 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
       img.draggable = false
       img.alt = ''
       const mime = r.mime && r.mime !== 'application/octet-stream' ? r.mime : mimeGuess(r.name)
-      img.src = iconURL(iconsForMime(mime), ROW_ICON)
-      img.addEventListener('error', () => { img.style.visibility = 'hidden' })
+      paintTileImage(img, r.name, iconsForMime(mime), ROW_ICON, { path: r.path, mime })
       const name = document.createElement('span')
       name.className = 'home-row-name'
       name.textContent = r.name
@@ -541,7 +632,7 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
       row.append(img, name, dir, when)
       wireItem(row, {
         path: r.path, name: r.name, isDir: false, mime: r.mime, menu: fileMenu(r.path, 'recent'),
-        siblings: recents.map(x => ({ path: x.path, name: x.name, mime: x.mime })),
+        siblings: ordered.map(x => ({ path: x.path, name: x.name, mime: x.mime })),
       })
       list.appendChild(row)
     }
@@ -566,6 +657,17 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     renderQuick()
     renderFavorites()
     renderRecent()
+    publishCounts()
+  }
+
+  /** the status bar has no rows to count on this page, so Home tells it */
+  function publishCounts(): void {
+    if (!visible) return
+    app.emit('home-counts', {
+      quick: quickItems().length,
+      favorites: favorites.filter(f => !f.isDir).length,
+      recent: app.settings.showRecent ? recents.length : 0,
+    })
   }
 
   // ---------- visibility ----------
@@ -579,7 +681,46 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     if (viewhost) viewhost.hidden = isHome
     if (isHome && !visible) void refresh()           // always land on fresh data
     visible = isHome
+    // the mode belongs to the tab, so arriving on Home from a folder in Details
+    // must bring Details with it rather than showing whatever was here last
+    if (isHome) { applyViewState(); publishCounts() }
   }
+
+  /**
+   * Home honours the view mode and the sort order.
+   *
+   * It did not, and nothing said so: the View and Sort buttons stayed enabled
+   * on this page and simply did nothing, because the mode lives on the Tab and
+   * only the file view was reading it. Home draws its own tiles and rows, so it
+   * has to apply the mode itself — which it can, since "how big are the icons"
+   * and "what order are these in" are questions this page can answer as well as
+   * any folder.
+   *
+   * The mode becomes a data attribute and CSS does the rest, so switching modes
+   * costs no re-render — the sections keep their scroll position and the
+   * Recent list does not flicker.
+   */
+  /** the mode the sections were last BUILT for; the thumbnail size and whether
+   *  there is a thumbnail at all both depend on it */
+  let builtForMode = ''
+
+  function applyViewState(): void {
+    const t = myTab()
+    const mode = t?.viewState?.mode ?? 'tiles'
+    root.dataset.mode = mode
+    const key = t?.viewState?.sortKey ?? 'mtime'
+    const desc = (t?.viewState?.sortDir ?? 'desc') === 'desc'
+    const modeChanged = mode !== builtForMode
+    if (modeChanged) builtForMode = mode
+    if (key !== sortKey || desc !== sortDesc || modeChanged) {
+      sortKey = key
+      sortDesc = desc
+      // a mode change is a rebuild, not just a restyle: List has no thumbnails
+      // and Large wants the big ones, so the <img> sources themselves change
+      if (visible) { renderQuick(); renderFavorites(); renderRecent() }
+    }
+  }
+  app.on('tab-viewstate', (t: Tab) => { if (t === myTab()) applyViewState() })
 
   app.on('tab-navigated', (t: Tab) => { if (t === myTab()) sync() })
   app.on('tabs-changed', () => sync())

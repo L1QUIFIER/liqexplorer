@@ -11,7 +11,11 @@
 // process behind their own IPC (main/ops/convert.ts, main/ops/checksums.ts).
 import { app, liq } from '../core/app'
 import { isArchiveName } from '../../shared/archive'
-import { TARGET_CWD, UNDOABLE, type BinConfig } from '../../shared/bins'
+import {
+  PATH_FORMAT_LABELS, TARGET_CWD, UNDOABLE,
+  type BinConfig, type PathFormat,
+} from '../../shared/bins'
+import type { PrintableCheck, PrintResult } from '../../shared/printing'
 import {
   addToStack, bins, describe, removeFromStack, resolveTarget, toast,
 } from './binstore'
@@ -161,7 +165,99 @@ export async function runBin(bin: BinConfig, paths: string[], opts: RunOptions =
     case 'checksums':
       await runChecksums(sources, bin.algo ?? 'sha256')
       return
+
+    case 'openWith': {
+      // No configured app means "ask", which is the existing Open With dialog
+      // rather than a second picker built into the tray.
+      if (!bin.appId) {
+        app.emit('show-openwith', { path: sources[0] })
+        return
+      }
+      try {
+        // one launch with every path: dropping twelve photos on "Open with
+        // GIMP" should start GIMP once, not twelve times
+        await liq.openWith(sources, bin.appId)
+        toast({ text: `Opened ${describe(sources)} in ${bin.appName || 'the chosen application'}.` })
+      } catch (e) {
+        toast({ text: 'That application could not be started.', sub: String((e as Error)?.message ?? e), bad: true })
+      }
+      consumed()
+      return
+    }
+
+    case 'copyPath': {
+      const text = formatPaths(sources, bin.pathFormat ?? 'plain')
+      await liq.copyTextToClipboard(text)
+      toast({
+        text: `Copied ${sources.length === 1 ? 'the path' : `${sources.length} paths`}.`,
+        sub: PATH_FORMAT_LABELS[bin.pathFormat ?? 'plain'],
+      })
+      consumed()
+      return
+    }
+
+    case 'print': {
+      const check = await liq.invoke('printableCheck', sources)
+        .catch(() => ({ ok: sources, needsApp: [], unknown: [] })) as PrintableCheck
+      // Refuse the ones CUPS would turn into pages of raw markup. Discovering
+      // that at the printer costs a tray of paper, so it is said first.
+      if (!check.ok.length && !check.unknown.length) {
+        toast({
+          text: 'None of these can be printed directly.',
+          sub: 'Word and spreadsheet files need their application to print them.',
+          bad: true,
+        })
+        return
+      }
+      const send = [...check.ok, ...check.unknown]
+      const skipped = check.needsApp.length
+      const go = (): void => {
+        void (async () => {
+          const r = await liq.invoke('printFiles', send, bin.printer || undefined)
+            .catch((e: Error) => ({ ok: false, queued: 0, failed: [], error: String(e?.message ?? e) })) as PrintResult
+          if (!r.ok) {
+            toast({ text: 'Nothing was printed.', sub: r.error ?? r.failed[0]?.error, bad: true })
+            return
+          }
+          toast({
+            text: `Sent ${r.queued} ${r.queued === 1 ? 'file' : 'files'} to ${bin.printer || 'the default printer'}.`,
+            sub: [
+              skipped ? `${skipped} skipped (needs an application)` : '',
+              r.failed.length ? `${r.failed.length} refused` : '',
+            ].filter(Boolean).join(' · ') || undefined,
+          })
+          consumed()
+        })()
+      }
+      // Printing is the one action here that costs something physical and
+      // cannot be undone, so a big drop asks first however the bin is set.
+      if (bin.confirm !== false || send.length > 5) {
+        confirmThen(
+          'Print these?',
+          `${send.length} ${send.length === 1 ? 'file goes' : 'files go'} to `
+          + `${bin.printer || 'the default printer'}.`
+          + (skipped ? ` ${skipped} cannot be printed directly and will be skipped.` : '')
+          + ' This cannot be undone.',
+          'Print', false, go,
+        )
+      } else go()
+      return
+    }
   }
+}
+
+/** How "Copy path" writes each path. */
+function formatPaths(paths: string[], fmt: PathFormat): string {
+  return paths.map(p => {
+    switch (fmt) {
+      case 'quoted': return `"${p}"`
+      // encodeURI leaves '#' and '?' alone, and both are legal in a file name —
+      // a path containing either would produce a URI pointing somewhere else
+      case 'uri': return 'file://' + encodeURI(p).replace(/[?#]/g, c => (c === '?' ? '%3F' : '%23'))
+      case 'name': return p.slice(p.lastIndexOf('/') + 1)
+      default: return p
+    }
+  }).join('\n')
 }
 
 /** "Show" jumps the active tab to a folder an action just wrote into. */
@@ -183,6 +279,9 @@ export function binSubtitle(bin: BinConfig, target: string): string {
     case 'compress': return `${bin.format ?? 'zip'} → ${target}`
     case 'convert': return `${(bin.convert?.format ?? 'jpg').toUpperCase()} → ${target}`
     case 'extract': return bin.extractMode === 'to' ? target : 'beside each archive'
+    case 'openWith': return bin.appName || 'Ask each time'
+    case 'copyPath': return PATH_FORMAT_LABELS[bin.pathFormat ?? 'plain']
+    case 'print': return bin.printer || 'Default printer'
     default: return bin.target === TARGET_CWD ? 'This folder' : target
   }
 }

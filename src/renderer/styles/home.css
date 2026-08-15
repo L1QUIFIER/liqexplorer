@@ -163,3 +163,123 @@ img.home-row-icon {
   font-size: var(--fs-caption);
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------- view modes */
+
+/* Home draws its own tiles and rows, so the tab's view mode has to be applied
+   here rather than by the file view — before this, changing the mode on Home
+   silently did nothing while the View button stayed enabled.
+
+   The mode only ever changes sizes and density, never which sections exist:
+   Quick access is still folders and Recent is still files whatever mode you
+   are in, and losing a section because you picked "List" would be a worse
+   surprise than the one this fixes. */
+
+/* --- icon grids: the tile is the unit that grows --- */
+.home-scroll { --home-tile-w: 190px; --home-tile-h: 52px; --home-icon: 32px; --home-row-h: 32px; }
+
+[data-mode="small"] .home-scroll  { --home-tile-w: 150px; --home-tile-h: 34px; --home-icon: 18px; --home-row-h: 26px; }
+[data-mode="medium"] .home-scroll { --home-tile-w: 180px; --home-tile-h: 46px; --home-icon: 28px; --home-row-h: 30px; }
+[data-mode="large"] .home-scroll  { --home-tile-w: 240px; --home-tile-h: 68px; --home-icon: 44px; --home-row-h: 40px; }
+[data-mode="extra-large"] .home-scroll { --home-tile-w: 300px; --home-tile-h: 88px; --home-icon: 60px; --home-row-h: 52px; }
+[data-mode="list"] .home-scroll   { --home-tile-w: 130px; --home-tile-h: 30px; --home-icon: 16px; --home-row-h: 26px; }
+[data-mode="details"] .home-scroll { --home-tile-w: 100%;  --home-tile-h: 30px; --home-icon: 20px; --home-row-h: 28px; }
+[data-mode="content"] .home-scroll { --home-tile-w: 340px; --home-tile-h: 60px; --home-icon: 36px; --home-row-h: 44px; }
+
+.home-tiles { grid-template-columns: repeat(auto-fill, minmax(var(--home-tile-w), 1fr)); }
+.home-tile { height: var(--home-tile-h); }
+img.home-tile-icon { width: var(--home-icon); height: var(--home-icon); }
+.home-row { height: var(--home-row-h); }
+img.home-row-icon { width: calc(var(--home-icon) * 0.62); height: calc(var(--home-icon) * 0.62); }
+
+/* Details puts Quick access in one column so its rows line up with Recent's,
+   which is what "details" means everywhere else in the app. */
+[data-mode="details"] .home-tiles { grid-template-columns: 1fr; }
+
+/* the two biggest icon modes give the name room to breathe under a big icon */
+[data-mode="extra-large"] .home-tile,
+[data-mode="large"] .home-tile { gap: 12px; }
+
+/* --- icon modes are a different SHAPE, not just a bigger row ---
+   Scaling the tile and calling it "Large icons" was half the job: an icon view
+   puts the picture ON TOP with the name under it, and Explorer's own Large/
+   Medium icons do exactly that. Sizes alone left Favorites as a 271x68 strip
+   with a big icon glued to its left edge, and Recent as a list of rows, neither
+   of which looks like the mode you asked for. Done in CSS against the existing
+   markup, so nothing re-renders when the mode changes. */
+
+[data-mode="extra-large"] .home-tile,
+[data-mode="large"] .home-tile,
+[data-mode="medium"] .home-tile,
+[data-mode="extra-large"] .home-row,
+[data-mode="large"] .home-row,
+[data-mode="medium"] .home-row {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 6px;
+  height: auto;
+  padding: 10px 6px;
+  text-align: center;
+}
+
+/* the name sits under the icon and may wrap to two lines, as Explorer's does */
+[data-mode="extra-large"] .home-tile-name,
+[data-mode="large"] .home-tile-name,
+[data-mode="medium"] .home-tile-name,
+[data-mode="extra-large"] .home-row-name,
+[data-mode="large"] .home-row-name,
+[data-mode="medium"] .home-row-name {
+  flex: none;
+  width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+/* Recent's folder and time columns are a table idea; under an icon they are
+   noise, and they are what Details is for. */
+[data-mode="extra-large"] .home-row-dir, [data-mode="extra-large"] .home-row-time,
+[data-mode="large"] .home-row-dir,       [data-mode="large"] .home-row-time,
+[data-mode="medium"] .home-row-dir,      [data-mode="medium"] .home-row-time {
+  display: none;
+}
+
+/* Recent becomes a grid in icon modes, matching Favorites above it */
+[data-mode="extra-large"] .home-list,
+[data-mode="large"] .home-list,
+[data-mode="medium"] .home-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--home-tile-w), 1fr));
+  gap: 4px 8px;
+}
+
+/* the pin sits in the corner rather than at the end of a line */
+[data-mode="extra-large"] .home-tile-pin,
+[data-mode="large"] .home-tile-pin,
+[data-mode="medium"] .home-tile-pin {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+[data-mode="extra-large"] .home-tile,
+[data-mode="large"] .home-tile,
+[data-mode="medium"] .home-tile { position: relative; }
+
+/* Details is the other end: one column, and the columns Recent actually has */
+[data-mode="details"] .home-row-name { flex: 0 1 420px; }
+
+/* A real thumbnail fills its box the way Explorer's does — `contain` would
+   letterbox a landscape photo inside a square and waste the size you asked for
+   by choosing a big icon mode. Icons keep `contain`, since they are drawn to
+   fit already. */
+img.home-tile-icon.is-thumb,
+img.home-row-icon.is-thumb {
+  object-fit: cover;
+  border-radius: 3px;
+  background: var(--bg-subtle);
+}

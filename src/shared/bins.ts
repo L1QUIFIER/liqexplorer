@@ -24,6 +24,9 @@ export type BinAction =
   | 'bulkRename'   // hands off to dialogs/bulkrename.ts
   | 'convert'      // ImageMagick / ffmpeg, writes NEW files (NOT undoable)
   | 'checksums'    // read-only
+  | 'openWith'     // hands the drop to an application (no file changes)
+  | 'copyPath'     // clipboard text (no file changes)
+  | 'print'        // CUPS via lp (no file changes)
 
 /** target sentinel: ask for a folder every time the bin runs */
 export const TARGET_ASK = '$ASK'
@@ -32,6 +35,16 @@ export const TARGET_CWD = '$CWD'
 
 export type ArchiveFormat = 'zip' | 'tar.gz' | '7z'
 export type ChecksumAlgo = 'md5' | 'sha1' | 'sha256'
+
+/** How "Copy path" writes the paths it puts on the clipboard. */
+export type PathFormat = 'plain' | 'quoted' | 'uri' | 'name'
+
+export const PATH_FORMAT_LABELS: Record<PathFormat, string> = {
+  plain: 'Plain path',
+  quoted: 'Quoted path',
+  uri: 'file:// address',
+  name: 'File name only',
+}
 
 export interface ConvertOptions {
   /** lowercase extension of the output format, e.g. 'jpg' | 'png' | 'webp' | 'avif' */
@@ -94,6 +107,15 @@ export interface BinConfig {
   extractMode?: 'auto' | 'named' | 'to'
   convert?: ConvertOptions
   algo?: ChecksumAlgo
+  /** openWith: the .desktop id to launch; empty/absent = ask every time */
+  appId?: string
+  /** openWith: the app's display name, cached so the tile can name it without
+   *  reading the whole desktop database to draw a subtitle */
+  appName?: string
+  /** copyPath: how the paths are written */
+  pathFormat?: PathFormat
+  /** print: CUPS destination; empty/absent = the system default printer */
+  printer?: string
 }
 
 export interface BinsConfig {
@@ -128,6 +150,9 @@ export const ACTION_LABELS: Record<BinAction, string> = {
   bulkRename: 'Bulk rename',
   convert: 'Convert images…',
   checksums: 'Checksums',
+  openWith: 'Open with…',
+  copyPath: 'Copy path',
+  print: 'Print',
 }
 
 let seq = 0

@@ -585,3 +585,48 @@ body.is-colresizing * { cursor: col-resize !important; }
 /* "what is this?" panel for a file the system could not name (fs/sniff.ts) */
 .pvr-identify { display: flex; flex-direction: column; gap: 6px; padding: 8px 2px 2px; }
 .pvr-idwhy { color: var(--text-secondary); font-size: var(--fs-caption); }
+
+/* -------------------------------------------------- Favorites (pinned files)
+
+   A pinned file looked identical to everything else in a folder, so the only
+   way to know was to go to Home and look. This marks it in place.
+
+   GOLD, and a BOOKMARK rather than a star: the star on these tiles already
+   means a rating, and two gold stars meaning two different things on one tile
+   is worse than no mark. The two can coexist — the rating badge keeps the
+   bottom-right corner it has always had, the bookmark takes the top-right. */
+
+:root { --fav-gold: #e0a92a; }
+
+/* rows: a gold edge, which reads down a long list without adding a column */
+.vh-item.is-fav.vh-row {
+  box-shadow: inset 2px 0 0 var(--fav-gold);
+}
+/* the name itself is what the eye lands on when scanning */
+.vh-item.is-fav .vh-namecell,
+.vh-item.is-fav .vh-name { color: var(--fav-gold); }
+
+/* thumbnails: a corner bookmark, opposite the rating badge */
+.vh-favbadge {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  display: inline-flex;
+  /* its own scrim, for the same reason the rating badge has one: this sits on
+     a photo whose colour nobody knows */
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 5px;
+  padding: 2px 3px;
+  line-height: 0;
+  pointer-events: none;
+}
+.vh-favbadge svg { width: 9px; height: 11px; fill: var(--fav-gold); display: block; }
+
+/* tiles/grids get a soft gold outline too, so the mark survives a busy photo */
+.vh-item.is-fav.vh-tile,
+.vh-item.is-fav.vh-grid {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fav-gold) 55%, transparent);
+  border-radius: var(--radius);
+}
+/* selection must still win: it is the state the user is acting on */
+.vh-item.is-fav.selected { box-shadow: none; }

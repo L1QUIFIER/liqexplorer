@@ -6,16 +6,21 @@
 // settings contract.
 import { liq } from '../core/app'
 import { openModal, el, closeX } from './dialogs'
+import { paintBinIcon, binColorClass, primeBinIcons, bumpBinIconCache } from '../views/binicon'
+import { binBuiltinSvg } from '../views/dropbins'
 import {
-  ACTION_LABELS, NEEDS_TARGET, TARGET_ASK, TARGET_CWD, defaultBins, newBinId,
-  type ArchiveFormat, type BinAction, type BinConfig, type ChecksumAlgo,
+  ACTION_LABELS, BIN_COLORS, NEEDS_TARGET, PATH_FORMAT_LABELS, TARGET_ASK, TARGET_CWD,
+  defaultBins, newBinId,
+  type ArchiveFormat, type BinAction, type BinConfig, type ChecksumAlgo, type PathFormat,
 } from '../../shared/bins'
 import { bins, patchBins, targetLabel } from '../views/binstore'
 import { binSubtitle } from '../views/binrun'
+import type { Printer } from '../../shared/printing'
 
 const ORDER: BinAction[] = [
   'stack', 'copy', 'move', 'symlink', 'compress', 'extract',
-  'favorites', 'bulkRename', 'convert', 'checksums', 'trash',
+  'favorites', 'bulkRename', 'convert', 'checksums',
+  'openWith', 'copyPath', 'print', 'trash',
 ]
 
 function svgBtn(title: string, d: string): HTMLButtonElement {
@@ -60,6 +65,12 @@ export function openBinSettings(editId?: string): void {
         update(bin.id, b => ({ ...b, hidden: !show.checked }))
         showList()
       })
+      // the tile's own icon, so the list reads the way the tray does — the
+      // whole reason for custom icons is telling two bins of the same action
+      // apart, which a text-only list cannot show
+      const ico = el('span', 'db-cfg-ico' + binColorClass(bin))
+      ico.appendChild(paintBinIcon(bin, binBuiltinSvg, 16))
+
       const name = el('div', 'db-cfg-name')
       name.appendChild(document.createTextNode(bin.label))
       const sub = el('span', 'db-cfg-sub', '  ' + binSubtitle(bin, targetLabel(bin)))
@@ -80,7 +91,7 @@ export function openBinSettings(editId?: string): void {
         showList()
       })
       btns.append(up, down, edit, del)
-      row.append(show, name, btns)
+      row.append(show, ico, name, btns)
       list.appendChild(row)
     })
     body.appendChild(list)
@@ -103,11 +114,12 @@ export function openBinSettings(editId?: string): void {
         action,
         label: ACTION_LABELS[action],
         target: NEEDS_TARGET.has(action) ? TARGET_ASK : undefined,
-        confirm: action === 'move' || action === 'trash',
+        confirm: action === 'move' || action === 'trash' || action === 'print',
         format: action === 'compress' ? 'zip' : undefined,
         extractMode: action === 'extract' ? 'to' : undefined,
         algo: action === 'checksums' ? 'sha256' : undefined,
         convert: action === 'convert' ? { format: 'jpg', maxDim: 0, quality: 88 } : undefined,
+        pathFormat: action === 'copyPath' ? 'plain' : undefined,
       }
       patchBins({ bins: [...bins().bins, bin] })
       showEditor(bin.id)
@@ -156,6 +168,121 @@ export function openBinSettings(editId?: string): void {
     labelInput.value = bin.label
     labelInput.addEventListener('input', () => update(id, b => ({ ...b, label: labelInput.value })))
     row('Name').appendChild(labelInput)
+
+    // ---- icon + colour ----
+    //
+    // The point of bins is having SEVERAL of the same kind — one "Copy to…" per
+    // folder you use often — and until now every one of them drew the same
+    // shape in the same colour, so during a drag they were told apart only by
+    // reading the subtitle. This is the part that makes them recognisable.
+    {
+      const r = row('Icon')
+      const pick = el('div', 'db-iconpick')
+
+      const preview = el('div', 'db-iconpick-prev')
+      const drawPreview = (): void => {
+        const b = bins().bins.find(x => x.id === id)
+        if (!b) return
+        preview.textContent = ''
+        preview.className = 'db-iconpick-prev' + binColorClass(b)
+        preview.appendChild(paintBinIcon(b, binBuiltinSvg, 20))
+      }
+
+      const kindSel = el('select', 'opt-select') as HTMLSelectElement
+      for (const [v, t] of [['builtin', 'Built-in'], ['emoji', 'Emoji'], ['image', 'Picture…'], ['themed', 'System icon']]) {
+        const o = document.createElement('option')
+        o.value = v
+        o.textContent = t
+        kindSel.appendChild(o)
+      }
+      kindSel.value = bin.icon?.kind ?? 'builtin'
+
+      const emojiWrap = el('div', 'db-iconpick-emoji')
+      const emojiInput = el('input', 'opt-input db-iconpick-input') as HTMLInputElement
+      emojiInput.type = 'text'
+      emojiInput.maxLength = 4
+      emojiInput.placeholder = '🙂'
+      emojiInput.value = bin.icon?.kind === 'emoji' ? bin.icon.value : ''
+      emojiInput.addEventListener('input', () => {
+        update(id, b => ({ ...b, icon: { kind: 'emoji', value: emojiInput.value } }))
+        drawPreview()
+      })
+      const quick = el('div', 'db-iconpick-quick')
+      // a small, useful set rather than a full picker: these are the ones a
+      // folder-shaped shortcut actually wants
+      for (const e of ['📁', '📷', '🎬', '🎵', '📄', '⭐', '💼', '🧾', '🗜️', '🚀', '🧪', '🗑️']) {
+        const b = el('button', 'db-iconpick-e', e)
+        b.type = 'button'
+        b.addEventListener('click', () => {
+          emojiInput.value = e
+          update(id, x => ({ ...x, icon: { kind: 'emoji', value: e } }))
+          drawPreview()
+        })
+        quick.appendChild(b)
+      }
+      emojiWrap.append(emojiInput, quick)
+
+      const imgBtn = el('button', 'btn btn-small', 'Choose picture…')
+      imgBtn.addEventListener('click', () => {
+        void (async () => {
+          const picked = await liq.invoke('binIconPick').catch(() => []) as string[]
+          if (!picked.length) return
+          const r2 = await liq.invoke('binIconImport', picked[0], id)
+            .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as { ok: boolean; value?: string; error?: string }
+          if (!r2.ok) { imgBtn.textContent = r2.error ?? 'That did not work'; return }
+          bumpBinIconCache()
+          update(id, b => ({ ...b, icon: { kind: 'image', value: r2.value! } }))
+          imgBtn.textContent = 'Choose a different picture…'
+          drawPreview()
+        })()
+      })
+
+      const themedInput = el('input', 'opt-input') as HTMLInputElement
+      themedInput.type = 'text'
+      themedInput.spellcheck = false
+      themedInput.placeholder = 'folder-pictures'
+      themedInput.value = bin.icon?.kind === 'themed' ? bin.icon.value : ''
+      themedInput.addEventListener('input', () => {
+        update(id, b => ({ ...b, icon: { kind: 'themed', value: themedInput.value.trim() } }))
+        drawPreview()
+      })
+
+      const syncKind = (): void => {
+        const k = kindSel.value
+        emojiWrap.hidden = k !== 'emoji'
+        imgBtn.hidden = k !== 'image'
+        themedInput.hidden = k !== 'themed'
+        if (k === 'builtin') update(id, b => ({ ...b, icon: undefined }))
+        else if (k === 'emoji') update(id, b => ({ ...b, icon: { kind: 'emoji', value: emojiInput.value } }))
+        else if (k === 'themed') update(id, b => ({ ...b, icon: { kind: 'themed', value: themedInput.value.trim() } }))
+        drawPreview()
+      }
+      kindSel.addEventListener('change', syncKind)
+
+      pick.append(preview, kindSel, emojiWrap, imgBtn, themedInput)
+      r.appendChild(pick)
+
+      // colour
+      const cr = row('Colour')
+      const swatches = el('div', 'db-colours')
+      for (const c of BIN_COLORS) {
+        const b = el('button', 'db-colour db-c-' + c + (( bin.color ?? 'default') === c ? ' is-on' : ''))
+        b.type = 'button'
+        b.title = c === 'default' ? 'Theme colour' : c
+        b.addEventListener('click', () => {
+          update(id, x => ({ ...x, color: c === 'default' ? undefined : c }))
+          for (const other of swatches.querySelectorAll('.db-colour')) other.classList.remove('is-on')
+          b.classList.add('is-on')
+          drawPreview()
+        })
+        swatches.appendChild(b)
+      }
+      cr.appendChild(swatches)
+
+      syncKind()
+      // syncKind() writes the icon for the current kind; draw once it has
+      drawPreview()
+    }
 
     // destination
     if (NEEDS_TARGET.has(bin.action) && !(bin.action === 'extract' && bin.extractMode !== 'to')) {
@@ -236,6 +363,78 @@ export function openBinSettings(editId?: string): void {
       form.appendChild(el('div', 'opt-note',
         'Format, size and quality are chosen on the sheet that opens when you use this bin, and '
         + 'remembered here.'))
+    }
+
+    if (bin.action === 'openWith') {
+      const sel = el('select', 'opt-select') as HTMLSelectElement
+      const ask = document.createElement('option')
+      ask.value = ''
+      ask.textContent = 'Ask each time'
+      sel.appendChild(ask)
+      sel.value = bin.appId ?? ''
+      row('Application').appendChild(sel)
+      form.appendChild(el('div', 'opt-note',
+        'Everything dropped here is handed to the application in one go, so dropping twelve '
+        + 'photos opens one window with twelve photos in it.'))
+      // the app list is long and comes from disk; fetched once the row exists so
+      // the dialog does not wait on it
+      void liq.invoke('listAllApps').then((apps: { id: string; name: string }[]) => {
+        for (const a of apps) {
+          const o = document.createElement('option')
+          o.value = a.id
+          o.textContent = a.name
+          sel.appendChild(o)
+        }
+        sel.value = bin.appId ?? ''
+      }).catch(() => { /* leave it as "Ask each time" */ })
+      sel.addEventListener('change', () => {
+        const name = sel.options[sel.selectedIndex]?.textContent ?? ''
+        update(id, b => ({
+          ...b,
+          appId: sel.value || undefined,
+          appName: sel.value ? name : undefined,
+        }))
+      })
+    }
+
+    if (bin.action === 'copyPath') {
+      const sel = el('select', 'opt-select') as HTMLSelectElement
+      for (const f of Object.keys(PATH_FORMAT_LABELS) as PathFormat[]) {
+        const o = document.createElement('option')
+        o.value = f
+        o.textContent = PATH_FORMAT_LABELS[f]
+        sel.appendChild(o)
+      }
+      sel.value = bin.pathFormat ?? 'plain'
+      sel.addEventListener('change', () => update(id, b => ({ ...b, pathFormat: sel.value as PathFormat })))
+      row('Write as').appendChild(sel)
+      form.appendChild(el('div', 'opt-note', 'One per line. Quoted is the form a terminal wants.'))
+    }
+
+    if (bin.action === 'print') {
+      const sel = el('select', 'opt-select') as HTMLSelectElement
+      const def = document.createElement('option')
+      def.value = ''
+      def.textContent = 'Default printer'
+      sel.appendChild(def)
+      sel.value = bin.printer ?? ''
+      row('Printer').appendChild(sel)
+      const note = el('div', 'opt-note', 'Looking for printers…')
+      form.appendChild(note)
+      void liq.invoke('listPrinters').then((ps: Printer[]) => {
+        for (const p of ps) {
+          const o = document.createElement('option')
+          o.value = p.name
+          o.textContent = p.name + (p.isDefault ? ' (default)' : '') + (p.ready ? '' : ' — disabled')
+          sel.appendChild(o)
+        }
+        sel.value = bin.printer ?? ''
+        note.textContent = ps.length
+          ? 'PDFs, text and pictures go straight to the queue. Word and spreadsheet files need '
+            + 'their own application, and are skipped rather than printed as raw markup.'
+          : 'No printers are set up on this computer, so this bin has nothing to send to.'
+      }).catch(() => { note.textContent = 'The printer list could not be read.' })
+      sel.addEventListener('change', () => update(id, b => ({ ...b, printer: sel.value || undefined })))
     }
 
     // confirm

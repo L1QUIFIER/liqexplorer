@@ -26,8 +26,18 @@ export function mountStatusBar(root: HTMLElement): void {
     const t = app.activeTab
     if (!t) return
     const n = t.rows.length
-    // Home has no item list of its own — "0 items" would just look broken
-    count.textContent = t.path === 'home://' ? '' : `${n} item${n === 1 ? '' : 's'}`
+    // Home has no rows of its own, so "0 items" would look broken and a blank
+    // bar (what was here) looks like the bar is broken instead. It does have
+    // counts — they just live on the page rather than on the tab.
+    if (t.path === 'home://') {
+      const parts: string[] = []
+      if (homeCounts.quick) parts.push(`${homeCounts.quick} pinned`)
+      if (homeCounts.favorites) parts.push(`${homeCounts.favorites} favourite${homeCounts.favorites === 1 ? '' : 's'}`)
+      if (homeCounts.recent) parts.push(`${homeCounts.recent} recent`)
+      count.textContent = parts.join('  ·  ')
+    } else {
+      count.textContent = `${n} item${n === 1 ? '' : 's'}`
+    }
     const s = t.selectedEntries()
     if (s.length) {
       const bytes = s.reduce((a, e) => a + (e.size > 0 ? e.size : 0), 0)
@@ -38,6 +48,12 @@ export function mountStatusBar(root: HTMLElement): void {
     detailsBtn.classList.toggle('active', t.viewState.mode === 'details')
     thumbsBtn.classList.toggle('active', t.viewState.mode === 'large')
   }
+
+  let homeCounts = { quick: 0, favorites: 0, recent: 0 }
+  app.on('home-counts', (c: { quick: number; favorites: number; recent: number }) => {
+    homeCounts = c
+    if (app.activeTab?.path === 'home://') render()
+  })
 
   const renderVisibility = () => { root.toggleAttribute('hidden', !app.settings.showStatusBar) }
 

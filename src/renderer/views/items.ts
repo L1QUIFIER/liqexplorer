@@ -15,6 +15,7 @@ import { markDuration } from './mediabadge'
 // self-mounting, same as livemedia above: importing starsHtml installs the
 // whole ratings feature (stylesheet, number keys, change fan-out)
 import { ratingBadgeHtml, starsHtml } from './ratings'
+import { isFavorite } from './favmark'
 
 export interface DetailCol {
   key: string           // SortKey, or a synthetic key like 'folderPath'
@@ -163,12 +164,27 @@ export function cellText(e: FileEntry, key: string, showExt: boolean): string {
 
 const CHECK = '<span class="vh-check"></span>'
 
+/** A pinned file is marked in every view shape, so it looks the same whichever
+ *  one you happen to be in. Folders are excluded: Quick access already pins
+ *  folders and shows them in the nav pane, so a second mark would say nothing
+ *  new. */
+function favCls(e: FileEntry): string {
+  return !e.isDir && isFavorite(e.path) ? ' is-fav' : ''
+}
+
+/** the corner mark itself — a bookmark, deliberately not a star, because a star
+ *  already means a rating on these tiles */
+const FAV_BADGE =
+  '<span class="vh-favbadge" title="In Favorites" aria-hidden="true">'
+  + '<svg viewBox="0 0 16 16"><path d="M4.5 2.5h7a1 1 0 0 1 1 1v10l-4.5-3-4.5 3v-10a1 1 0 0 1 1-1z"/></svg>'
+  + '</span>'
+
 export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void {
   const name = escapeHtml(displayName(e, ctx.showExt))
   const mode = ctx.mode
   let html = ''
   if (mode === 'details') {
-    el.className = 'vh-item vh-row vh-details'
+    el.className = 'vh-item vh-row vh-details' + favCls(e)
     const cols = ctx.cols ?? []
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i]
@@ -192,11 +208,11 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
       }
     }
   } else if (mode === 'list' || mode === 'small') {
-    el.className = 'vh-item vh-row vh-listrow'
+    el.className = 'vh-item vh-row vh-listrow' + favCls(e)
     html = `${CHECK}<img class="vh-icon" width="16" height="16" alt="">` +
       `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>`
   } else if (mode === 'content') {
-    el.className = 'vh-item vh-row vh-content'
+    el.className = 'vh-item vh-row vh-content' + favCls(e)
     const sub = ctx.searchMode ? dirname(e.path) : typeLabelFor(e)
     html = `${CHECK}<span class="vh-thumbwrap" style="width:32px;height:32px"><img class="vh-icon" alt=""></span>` +
       `<span class="vh-content-main"><span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>` +
@@ -204,20 +220,20 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
       `<span class="vh-content-right"><span>${escapeHtml(formatDate(e.mtime))}</span>` +
       `<span>${e.isDir ? '' : escapeHtml(formatSize(e.size))}</span></span>`
   } else if (mode === 'tiles') {
-    el.className = 'vh-item vh-tile'
+    el.className = 'vh-item vh-tile' + favCls(e)
     html = `${CHECK}<span class="vh-thumbwrap" style="width:48px;height:48px"><img class="vh-icon" alt="">` +
-      `${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}</span>` +
+      `${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}</span>` +
       `<span class="vh-tile-lines"><span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>` +
       `<span class="vh-sub">${escapeHtml(typeLabelFor(e))}</span>` +
       `<span class="vh-sub">${e.isDir ? '' : escapeHtml(formatSize(e.size))}</span></span>`
   } else {
-    el.className = `vh-item vh-grid vh-${mode}`
+    el.className = `vh-item vh-grid vh-${mode}` + favCls(e)
     // The badge lives INSIDE .vh-thumbwrap, so it is positioned against the
     // picture rather than the tile. That is what makes it impossible for it to
     // cover the filename — including when selecting a tile expands the label to
     // eight lines, which is where the old overlay was at its worst.
     html = `${CHECK}<span class="vh-thumbwrap" style="width:${ctx.icon}px;height:${ctx.icon}px">` +
-      `<img class="vh-icon" alt="">${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}</span>` +
+      `<img class="vh-icon" alt="">${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}</span>` +
       `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>`
   }
   el.innerHTML = html

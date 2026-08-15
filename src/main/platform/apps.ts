@@ -301,12 +301,22 @@ async function defaultAppFor(p: string): Promise<string> {
 /** desktop ids that are this application, in any of its installed spellings */
 const SELF_IDS = new Set(['liqexplorer.desktop'])
 
-export async function openWith(p: string, appId: string): Promise<void> {
+/**
+ * Launch `appId` with one path or several.
+ *
+ * Several matters for the drop bin: dropping twelve photos on an "Open with
+ * GIMP" bin should start GIMP once holding twelve images, not twelve copies of
+ * GIMP. `gio launch` passes every trailing argument to the desktop entry, which
+ * expands %F/%U into the whole list — so this is one process either way.
+ */
+export async function openWith(p: string | string[], appId: string): Promise<void> {
   const d = loadDb()
   const app = d.apps.get(appId)
   if (!app) throw new Error(`Unknown application: ${appId}`)
+  const paths = (Array.isArray(p) ? p : [p]).filter(x => typeof x === 'string' && x.startsWith('/'))
+  if (!paths.length) throw new Error('Nothing to open.')
   // gio launch handles %u/%f substitution, Terminal=true and D-Bus activation
-  spawn('gio', ['launch', app.file, p], { detached: true, stdio: 'ignore' }).unref()
+  spawn('gio', ['launch', app.file, ...paths], { detached: true, stdio: 'ignore' }).unref()
 }
 
 export async function setDefaultApp(mime: string, appId: string): Promise<void> {

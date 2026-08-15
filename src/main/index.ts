@@ -21,6 +21,7 @@ import './platform/nemoactions'              // self-registers nemoActions / run
 import './fs/sniff'                          // self-registers identifyFile
 import './platform/tools'                    // self-registers toolReport
 import './platform/extstore'                 // self-registers the extension store
+import './platform/printing'                 // self-registers listPrinters / printFiles
 import './ops/imageedit'   // self-registers applyEdit
 import './ops/dropbins'     // self-registers binsGet/binsSet/convertImages/checksumsRun
 import './platform/mediainfo' // self-registers fileFacts/fileFactsMany (Details tab)

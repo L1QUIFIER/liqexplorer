@@ -469,7 +469,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   thumbnailsRemote: true,
   // Hover-to-play rather than 'always': sweeping the pointer over a folder of
   // 200 clips must not put 200 decoders on a CIFS share. 10 concurrent players
-  // is the measured knee on a typical desktop (see views/livemedia.ts).
+  // is a practical concurrency cap (see views/livemedia.ts).
   liveMedia: 'hover',
   liveMediaScrub: true,
   liveMediaAnimated: true,
@@ -508,10 +508,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   indexRefreshMins: 60,
   // Off by default: a file manager that talks to the network on every keystroke
   // is a change in character, and this only helps someone who runs a FileFinder
-  // server. The URL is prefilled with the one this was developed against, so
-  // turning the checkbox on is the whole setup for that machine.
+  // server. Leave the URL empty until the user configures their own.
   filefinderEnabled: false,
-  filefinderUrl: 'http://127.0.0.1:8090',
+  filefinderUrl: '',
   filefinderMounts: [],
 }
 

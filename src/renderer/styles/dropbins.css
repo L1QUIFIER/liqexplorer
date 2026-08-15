@@ -369,3 +369,69 @@
   border-radius: 2px;
   transition: width var(--dur-fast) linear;
 }
+
+/* ----------------------------------------------------- custom bin icons */
+
+.db-ico-emoji { line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.db-ico-img { object-fit: contain; display: block; }
+
+/* Tile accents. These tint the ICON, not the whole tile: a fully coloured tile
+   fights the drag highlight, which is the one colour that has to win. */
+.db-c-red    .db-ico, .db-c-red.db-cfg-ico    { color: #e06c6c; }
+.db-c-orange .db-ico, .db-c-orange.db-cfg-ico { color: #e0954a; }
+.db-c-yellow .db-ico, .db-c-yellow.db-cfg-ico { color: #d8c04a; }
+.db-c-green  .db-ico, .db-c-green.db-cfg-ico  { color: #6fbf73; }
+.db-c-teal   .db-ico, .db-c-teal.db-cfg-ico   { color: #4fb3b3; }
+.db-c-blue   .db-ico, .db-c-blue.db-cfg-ico   { color: #5b9bd5; }
+.db-c-purple .db-ico, .db-c-purple.db-cfg-ico { color: #a07cd0; }
+.db-c-pink   .db-ico, .db-c-pink.db-cfg-ico   { color: #d97bb0; }
+
+/* the icon shown beside each row in the manager */
+.db-cfg-ico {
+  flex: none;
+  width: 20px; height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.db-cfg-ico svg { width: 16px; height: 16px; }
+
+/* ---- the picker ---- */
+.db-iconpick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.db-iconpick-prev {
+  flex: none;
+  width: 30px; height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.db-iconpick-prev svg { width: 20px; height: 20px; }
+.db-iconpick-emoji { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.db-iconpick-input { width: 56px; text-align: center; }
+.db-iconpick-quick { display: flex; gap: 2px; flex-wrap: wrap; }
+.db-iconpick-e {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 4px;
+}
+.db-iconpick-e:hover { background: var(--bg-hover); border-color: var(--stroke); }
+
+.db-colours { display: flex; gap: 5px; flex-wrap: wrap; }
+.db-colour {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  background: currentColor;
+  padding: 0;
+}
+/* the default swatch shows the theme's own colour rather than a colour of its own */
+.db-colour.db-c-default { background: var(--text-secondary); }
+.db-colour.is-on { border-color: var(--text-primary); }

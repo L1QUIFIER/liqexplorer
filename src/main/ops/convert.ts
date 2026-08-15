@@ -29,9 +29,8 @@
 //   * outputs NEVER overwrite: an existing name gets " (2)", " (3)", … exactly
 //     like ops/quick.ts. That also makes converting in place harmless.
 //   * MAGICK_THREAD_LIMIT=1 per child. ImageMagick's OpenMP otherwise takes all
-//     available cores *per process*, so parallel encoders fight each other. Measured
-//     on 43x 3000x2000 JPEGs -> 1600px: 0.64s wall / 4.1s CPU with the limit,
-//     0.89s wall / 19.0s CPU without it. Same work, 4.6x less of the machine.
+//     available cores *per process*, so parallel encoders fight each other.
+//     Limiting threads per child keeps wall time down while using far less CPU.
 import { ipcMain, type WebContents } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import * as fsp from 'node:fs/promises'

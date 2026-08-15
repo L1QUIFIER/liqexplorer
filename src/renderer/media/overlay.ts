@@ -190,6 +190,22 @@ function ensureStyles(): void {
 }
 ensureStyles()
 
+/**
+ * Fullscreen means FULLSCREEN — the whole display, not the app window.
+ *
+ * This used to be a CSS class and nothing else, so pressing F grew the panel to
+ * the size of the LiqExplorer window and stopped there: title bar, tabs and
+ * taskbar all still on screen. For a photo or a film that is not what the word
+ * promises, and the only way to get a real one was to pop the viewer out into
+ * its own window first.
+ *
+ * The element Fullscreen API gives the real thing for the docked viewer too.
+ * The CSS class is kept and still applied, for two reasons: it lays the panel
+ * out edge-to-edge inside whatever box it has been given, and it is the
+ * fallback when requestFullscreen is refused (which happens without a user
+ * gesture, and in some embedded contexts). So a refusal degrades to the old
+ * fill-the-window behaviour instead of doing nothing at all.
+ */
 function setFullscreen(on: boolean): void {
   if (!panel || on === fullscreen) return
   if (on) {
@@ -197,14 +213,46 @@ function setFullscreen(on: boolean): void {
     fullscreen = true
     panel.classList.add('is-full')
     panel.style.left = panel.style.top = panel.style.width = panel.style.height = ''
+    void panel.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {
+      // refused: the class alone still fills the window, which is what this
+      // did before — worse than the real thing, better than nothing
+    })
   } else {
     fullscreen = false
-    panel.classList.remove('is-full')
-    applyGeometry(clampGeometry(restoreGeom ?? defaultGeometry()))
+    // Leaving is asynchronous. Restoring the geometry here — while the element
+    // is still presented fullscreen — was measured putting the panel back at
+    // the size of the whole app window instead of the size it had before,
+    // because the inline styles are applied against a box the UA is still
+    // overriding. The restore therefore happens in restoreFromFullscreen(),
+    // once the browser says it has finished.
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => restoreFromFullscreen())
+    else restoreFromFullscreen()
   }
   viewer?.setFullscreenLabel(fullscreen)
   viewer?.layout()
 }
+
+/** put the panel back where it was before fullscreen took it */
+function restoreFromFullscreen(): void {
+  if (!panel) return
+  panel.classList.remove('is-full')
+  applyGeometry(clampGeometry(restoreGeom ?? defaultGeometry()))
+  viewer?.setFullscreenLabel(false)
+  viewer?.layout()
+}
+
+/**
+ * Fullscreen can also end without going through us — Chromium handles Escape
+ * itself, and so do F11 and a monitor change. Without this the panel would come
+ * back to a normal window still wearing .is-full: pinned edge-to-edge, with no
+ * way to drag or resize it.
+ */
+document.addEventListener('fullscreenchange', () => {
+  if (!panel) return
+  if (document.fullscreenElement) return
+  fullscreen = false
+  restoreFromFullscreen()
+})
 
 export function closeMediaViewer(): void {
   if (!panel) return

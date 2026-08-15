@@ -18,6 +18,7 @@ import { usableResume } from '../../shared/resume'
 import { previewURL } from '../../shared/preview'
 import { createTriage, type TriageDeck, type TriageHooks } from './triage'
 import { createFilmstrip, type FilmstripHandle } from './filmstrip'
+import { createWall, type WallHandle } from './wall'
 import { attachSubtitles, type SubtitleAttachment } from './subtitles'
 import { trackLabel, type MediaTracks } from '../../shared/tracks'
 
@@ -193,6 +194,21 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
 
   const stage = el('div', 'mv-stage')
   const content = el('div', 'mv-content')
+
+  /**
+   * View modes.
+   *
+   *   single   one item, the transport, the filmstrip — what this always was
+   *   theatre  the same item with everything else out of the way: chrome dimmed
+   *            to the edges of vision, the picture given the whole panel
+   *   wall     an equal grid of muted looping tiles (media/wall.ts)
+   *
+   * The mode lives here rather than in the overlay because the viewer owns the
+   * stage, the playlist and the keyboard — the three things a mode changes.
+   */
+  type ViewerMode = 'single' | 'theatre' | 'wall'
+  let vmode: ViewerMode = 'single'
+  let wall: WallHandle | null = null
   const errorBox = el('div', 'mv-error')
   errorBox.hidden = true
   // transient, and deliberately not an error: "this is being converted for you"
@@ -320,6 +336,49 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   // triage deck deliberately does
   const strip: FilmstripHandle = createFilmstrip((i) => show(i))
   root.append(header, stage, bar, zoomBar, strip.el, seekPop)
+
+  // ---------------------------------------------------------------- modes
+
+  /**
+   * Enter a mode. Idempotent, and always leaves exactly one of the three in
+   * charge of the stage — a wall left running behind a single item would keep
+   * every one of its decoders alive.
+   */
+  function setMode(next: ViewerMode): void {
+    if (destroyed || next === vmode) return
+    // leaving wall: tear the decoders down before anything else is built
+    if (vmode === 'wall') {
+      wall?.destroy()
+      wall = null
+      content.hidden = false
+    }
+    vmode = next
+    root.dataset.vmode = next
+
+    if (next === 'wall') {
+      // the single item stops: its audio would play under a wall of muted tiles
+      handle?.dispose()
+      handle = null
+      content.hidden = true
+      wall = createWall({
+        items,
+        index,
+        // double-click a tile to spotlight it; Enter (or the tile menu, later)
+        // hands it back to the single viewer
+        onOpen: (i) => { setMode('single'); show(i) },
+      })
+      stage.appendChild(wall.el)
+    } else if (vmode !== 'wall' && !handle) {
+      // coming back from the wall: the single item has to be rebuilt
+      show(index)
+    }
+    syncTools()
+    layout()
+  }
+
+  function cycleMode(): void {
+    setMode(vmode === 'single' ? 'theatre' : vmode === 'theatre' ? 'wall' : 'single')
+  }
 
   // -------------------------------------------------------------- item switch
 
@@ -1022,6 +1081,11 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
         on: loopIn !== null, enabled: isMedia, run: () => cycleLoop() },
       { label: 'Rename…', key: 'F2', enabled: !!items[index]?.path.startsWith('/'), run: () => startRename() },
       { label: 'Fullscreen', key: 'F', enabled: true, run: () => opts.onFullscreen?.() },
+      { label: 'Theatre mode', key: 'T', on: vmode === 'theatre', enabled: true,
+        run: () => setMode(vmode === 'theatre' ? 'single' : 'theatre') },
+      { label: 'Wall', key: 'W', on: vmode === 'wall', enabled: items.length > 1,
+        run: () => setMode(vmode === 'wall' ? 'single' : 'wall') },
+      { label: 'Bigger / smaller grid', key: 'G', enabled: vmode === 'wall', run: () => wall?.cycleGrid() },
       { label: 'Open in another application', key: '', enabled: !!items[index],
         run: () => { void window.liq?.openPath?.(items[index].path) } },
     ]
@@ -1228,6 +1292,13 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
 
   function handleKey(e: KeyboardEvent): boolean {
     if (e.ctrlKey || e.metaKey || e.altKey) return false
+    // mode switches work from any mode
+    if (e.key === 'w' || e.key === 'W') { setMode(vmode === 'wall' ? 'single' : 'wall'); return true }
+    if (e.key === 't' || e.key === 'T') { setMode(vmode === 'theatre' ? 'single' : 'theatre'); return true }
+    // The wall owns paging, the grid size and pinning while it is up; anything
+    // it does not claim (Escape, F, the rating digits) falls through to the
+    // handler below, which is why this is a first refusal and not a return.
+    if (vmode === 'wall' && wall?.handleKey(e)) return true
     // first refusal: while the deck is up the digits mean ratings, not zoom
     if (triage?.handleKey(e)) { syncTools(); return true }
     const k = e.key

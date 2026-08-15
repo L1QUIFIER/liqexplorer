@@ -25,12 +25,13 @@ import type { FileEntry } from '../../shared/types'
 import { showMenu } from '../menus/menu'
 import { iconImg } from '../dialogs/dialogs'
 import { openBinSettings } from '../dialogs/binsettings'
-import type { BinConfig } from '../../shared/bins'
+import type { BinAction, BinConfig } from '../../shared/bins'
 import {
   bins, clearStack, dragHasPaths, loadBins, onBinsChanged, patchBins, readDropPaths,
   removeFromStack, setToastHost, targetLabel, toast,
 } from './binstore'
 import { binSubtitle, runBin } from './binrun'
+import { paintBinIcon, binColorClass, primeBinIcons } from './binicon'
 
 const ICONS: Record<string, string> = {
   stack: '<path d="M8 2 2 5l6 3 6-3-6-3Z"/><path d="M2.4 8.2 8 11l5.6-2.8"/><path d="M2.4 11.2 8 14l5.6-2.8"/>',
@@ -45,6 +46,15 @@ const ICONS: Record<string, string> = {
   convert: '<rect x="2.5" y="3.6" width="11" height="8.8" rx="1.4"/><circle cx="6" cy="6.7" r="1"/><path d="m2.9 11.3 3.1-2.8 2.2 2 2-1.7 3 2.6"/>',
   checksums: '<path d="M5.7 2.6 4.5 13.4M11.6 2.6l-1.2 10.8M2.8 5.9h10.4M2.3 10.1h10.4"/>',
 }
+const NEW_ICONS: Record<string, string> = {
+  // a window with an arrow leaving it
+  openWith: '<path d="M2.5 5.5v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8 8l5.5-5.5M9.5 2.5h4v4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+  // a clipboard
+  copyPath: '<rect x="4.5" y="3" width="7" height="10.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.5 3V2.2a.7.7 0 0 1 .7-.7h1.6a.7.7 0 0 1 .7.7V3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.6 7h2.8M6.6 9.4h2.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>',
+  // a printer
+  print: '<path d="M4.5 6V2.8h7V6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><rect x="2.5" y="6" width="11" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 9.5h7v3.8h-7z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+}
+
 const PILL_ICON =
   '<path d="M2.5 9.4h3.2l.9 1.8h2.8l.9-1.8h3.2"/><path d="M4.2 3.4h7.6l2.2 6v3.1c0 .5-.4.9-.9.9H2.9a.9.9 0 0 1-.9-.9V9.4z"/>'
 
@@ -297,14 +307,19 @@ function tileMenu(bin: BinConfig, x: number, y: number): void {
   ], { x, y, minWidth: 180 })
 }
 
+/** the built-in shape for an action, for anything that needs to fall back */
+export function binBuiltinSvg(action: BinAction): string {
+  return svg(NEW_ICONS[action] ?? ICONS[action] ?? ICONS.copy)
+}
+
 function buildTile(bin: BinConfig): HTMLElement {
   const tile = document.createElement('button')
-  tile.className = 'db-tile' + (bin.action === 'trash' ? ' db-danger' : '')
+  tile.className = 'db-tile' + (bin.action === 'trash' ? ' db-danger' : '') + binColorClass(bin)
   tile.dataset.bin = bin.id
 
   const ico = document.createElement('span')
   ico.className = 'db-ico'
-  ico.innerHTML = svg(ICONS[bin.action] ?? ICONS.copy)
+  ico.appendChild(paintBinIcon(bin, binBuiltinSvg))
 
   const text = document.createElement('span')
   text.className = 'db-text'
@@ -679,6 +694,7 @@ export function mountDropBins(): void {
   }
   const sb = document.getElementById('statusbar')
   if (sb) new ResizeObserver(layout).observe(sb)
+  void primeBinIcons()          // custom icons need the profile path before the first paint
   app.on('settings-changed', () => layout())
 
   let sig = binsSignature()

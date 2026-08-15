@@ -56,6 +56,8 @@ export interface Resolved {
   pdftoppm: string
   pdftotext: string
   python: string
+  /** CUPS client, for the Print bin */
+  lp: string
 }
 
 let cached: Resolved | null = null
@@ -81,6 +83,7 @@ export function resolveTools(): Resolved {
     pdftoppm: firstOnPath('pdftoppm'),
     pdftotext: firstOnPath('pdftotext'),
     python: firstOnPath('python3', 'python'),
+    lp: firstOnPath('lp'),
   }
   return cached
 }
@@ -165,6 +168,13 @@ const NEEDS: Need[] = [
     optional: true,
     have: () => !!resolveTools().exiftool,
     pkg: { apt: 'libimage-exiftool-perl', pacman: 'perl-image-exiftool', dnf: 'perl-Image-ExifTool' },
+  },
+  {
+    key: 'cups', label: 'CUPS (lp)',
+    needed: 'The Print drop bin — sending files to a printer',
+    optional: true,
+    have: () => !!resolveTools().lp,
+    pkg: { apt: 'cups-client', pacman: 'cups', dnf: 'cups-client' },
   },
   {
     key: 'dbus', label: 'python3-dbus',
@@ -275,6 +285,7 @@ function foundName(key: string, t: Resolved): string {
     case 'ripgrep': return t.ripgrep
     case 'qpdf': return t.qpdf
     case 'exiftool': return t.exiftool
+    case 'cups': return t.lp
     case 'dbus': return t.python
     default: return ''
   }

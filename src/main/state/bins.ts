@@ -85,3 +85,70 @@ export async function save(patch: Partial<BinsConfig>): Promise<BinsConfig> {
 
 ipcMain.handle(CH('binsGet'), () => load())
 ipcMain.handle(CH('binsSet'), (_e, patch: Partial<BinsConfig>) => save(patch))
+
+// ------------------------------------------------------------- custom icons
+//
+// A bin can show a picture the user chose. The file is COPIED into the profile
+// rather than referenced where it sits: a tile that goes blank because the
+// original was moved or the drive was unplugged is worse than no custom icon,
+// and this is a 20KB copy, once.
+
+const ICON_DIR = path.join(STATE_DIR, 'binicons')
+
+/** the magic bytes of the formats Chromium will actually draw in a tile */
+function imageKind(buf: Buffer): string {
+  if (buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50) return 'png'
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return 'jpg'
+  if (buf.length > 12 && buf.subarray(0, 4).toString() === 'RIFF' && buf.subarray(8, 12).toString() === 'WEBP') return 'webp'
+  if (buf.length > 4 && buf.subarray(0, 5).toString('utf8').toLowerCase() === '<?xml') return 'svg'
+  if (buf.subarray(0, 200).toString('utf8').toLowerCase().includes('<svg')) return 'svg'
+  if (buf.length > 6 && buf.subarray(0, 6).toString() === 'GIF89a') return 'gif'
+  if (buf.length > 6 && buf.subarray(0, 6).toString() === 'GIF87a') return 'gif'
+  return ''
+}
+
+export function binIconsDir(): string { return ICON_DIR }
+
+/**
+ * Copy an image into the profile and return the name to store on the bin.
+ *
+ * The extension is decided by the BYTES, not by the name it arrived with: a
+ * .png that is really an HTML error page would otherwise be stored as a png and
+ * silently fail to draw, which looks like the feature is broken.
+ */
+export async function importBinIcon(src: string, binId: string): Promise<{ ok: boolean; value?: string; error?: string }> {
+  if (!src || !src.startsWith('/')) return { ok: false, error: 'Not a file on this computer.' }
+  try {
+    const st = await fsp.stat(src)
+    if (!st.isFile()) return { ok: false, error: 'That is not a file.' }
+    if (st.size > 4 * 1024 * 1024) return { ok: false, error: 'That image is larger than 4 MB.' }
+    const buf = await fsp.readFile(src)
+    const kind = imageKind(buf)
+    if (!kind) return { ok: false, error: 'That is not an image this can draw (PNG, JPEG, WebP, GIF or SVG).' }
+    await fsp.mkdir(ICON_DIR, { recursive: true })
+    // the bin id keeps one icon per bin, so replacing an icon does not leave
+    // the old file behind for ever
+    const safeId = binId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60) || 'bin'
+    for (const old of await fsp.readdir(ICON_DIR).catch(() => [])) {
+      if (old.startsWith(safeId + '.')) await fsp.rm(path.join(ICON_DIR, old), { force: true }).catch(() => {})
+    }
+    const name = `${safeId}.${kind}`
+    await fsp.writeFile(path.join(ICON_DIR, name), buf)
+    return { ok: true, value: name }
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) }
+  }
+}
+
+ipcMain.handle(CH('binIconsDir'), () => ICON_DIR)
+ipcMain.handle(CH('binIconImport'), (_e, src: string, binId: string) => importBinIcon(src, binId))
+ipcMain.handle(CH('binIconPick'), async (e) => {
+  const { BrowserWindow, dialog } = require('electron') as typeof import('electron')
+  const win = BrowserWindow.fromWebContents(e.sender)
+  const r = await dialog.showOpenDialog(win!, {
+    title: 'Choose a picture for this bin',
+    properties: ['openFile'],
+    filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] }],
+  })
+  return r.canceled ? [] : r.filePaths
+})

@@ -752,3 +752,124 @@
 .mv-moreitem:hover:not(:disabled) { background: var(--bg-hover); }
 .mv-moreitem:disabled { color: var(--text-disabled); cursor: default; }
 .mv-moreitem.is-on { color: var(--accent); }
+
+/* ================================================================= modes */
+
+/* --- THEATRE: the picture, and as little else as the mode can manage ---
+   Not fullscreen (that is F, and it is a different thing) — theatre is about
+   what surrounds the picture, so it works in a floating panel, in a pop-out
+   window and inside fullscreen alike. Chrome is not removed, only pushed down
+   to a whisper and brought back on hover: a control you cannot find is worse
+   than one you can see. */
+.mv-viewer[data-vmode="theatre"] { background: #000; }
+.mv-viewer[data-vmode="theatre"] .mv-head,
+.mv-viewer[data-vmode="theatre"] .mv-bar,
+.mv-viewer[data-vmode="theatre"] .mv-zoombar,
+.mv-viewer[data-vmode="theatre"] .mv-strip {
+  opacity: 0.12;
+  transition: opacity 140ms ease-out;
+}
+.mv-viewer[data-vmode="theatre"] .mv-head:hover,
+.mv-viewer[data-vmode="theatre"] .mv-bar:hover,
+.mv-viewer[data-vmode="theatre"] .mv-zoombar:hover,
+.mv-viewer[data-vmode="theatre"] .mv-strip:hover,
+.mv-viewer[data-vmode="theatre"]:focus-within .mv-bar { opacity: 1; }
+/* the stage takes back the room the chrome was using */
+.mv-viewer[data-vmode="theatre"] .mv-stage { background: #000; }
+
+/* --- WALL: an equal grid of tiles --- */
+.mv-wall {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--wall-cols, 3), 1fr);
+  grid-auto-rows: 1fr;
+  gap: 4px;
+  padding: 4px;
+  overflow: hidden;
+  background: #0b0b0b;
+}
+
+.mv-wt {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #000;
+  border: 1px solid transparent;
+  min-width: 0;
+  min-height: 0;
+  cursor: pointer;
+}
+/* equal tiles whatever the clip's shape — a grid of mismatched panes reads as
+   broken, which is why BMM forces uniform stretch too */
+.mv-wt-host { position: absolute; inset: 0; }
+.mv-wt-host > video,
+.mv-wt-host > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* the tile that currently has audio */
+.mv-wt.is-live { border-color: var(--accent); }
+.mv-wt.is-live .mv-wt-cap { color: #fff; }
+/* pinned: paging leaves it alone, so it says so permanently */
+.mv-wt.is-pinned { border-color: #e0a92a; }
+
+/* ABOVE the media: render.ts gives its <img>/<video> `position:absolute;
+   z-index:1` (it pans and zooms them), so tile chrome at the default z-index
+   paints underneath the picture and is invisible. */
+.mv-wt-cap {
+  position: absolute;
+  z-index: 2;
+  left: 0; right: 0; bottom: 0;
+  padding: 3px 6px;
+  font-size: var(--fs-caption);
+  color: rgba(255, 255, 255, 0.72);
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* per-tile controls, on hover only: at rest the wall is the picture */
+.mv-wt-bar {
+  position: absolute;
+  z-index: 3;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+  background: linear-gradient(rgba(0, 0, 0, 0.65), transparent);
+}
+.mv-wt:hover .mv-wt-bar { opacity: 1; }
+.mv-wt-btn {
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  cursor: pointer;
+}
+.mv-wt-btn:hover { background: rgba(0, 0, 0, 0.8); }
+.mv-wt-btn.is-on { background: #e0a92a; color: #000; }
+
+/* spotlight: one tile fills the wall, the rest step out of the way */
+.mv-wall.is-spot .mv-wt { display: none; }
+.mv-wall.is-spot .mv-wt.is-spot {
+  display: block;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+.mv-wall.is-spot .mv-wt.is-spot .mv-wt-host > video,
+.mv-wall.is-spot .mv-wt.is-spot .mv-wt-host > img { object-fit: contain; }
+
+/* The single-item chrome means nothing on a wall: there is no one current time
+   to scrub, no one zoom level, and the filmstrip duplicates what the grid
+   already shows. Each tile carries its own controls instead. */
+.mv-viewer[data-vmode="wall"] .mv-bar,
+.mv-viewer[data-vmode="wall"] .mv-zoombar,
+.mv-viewer[data-vmode="wall"] .mv-strip { display: none; }
+/* the stage takes the room back */
+.mv-viewer[data-vmode="wall"] .mv-stage { background: #0b0b0b; }

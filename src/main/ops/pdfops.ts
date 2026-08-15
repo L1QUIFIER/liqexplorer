@@ -5,17 +5,20 @@
 //
 // WHAT IS AND IS NOT POSSIBLE HERE, and why:
 //
-//   * There is no qpdf on this machine. qpdf is the tool that edits a PDF's
-//     page tree in place — with it, rotating a page is a metadata change.
-//     Without it the only lossless-ish route is pdfseparate + pdfunite, which
-//     copies page content but rebuilds the document: the outline, form fields,
-//     cross-page annotations and any encryption do not survive. That cost is
-//     stated in the UI before a write (shared/doc.ts PDF_REBUILD_WARNING).
-//   * Rotation is therefore NOT offered. Ghostscript could do it, but only by
-//     re-interpreting and re-emitting every page — recompressing images and
-//     subsetting fonts across a document the user asked to turn one page of.
-//     A disabled control that says "Install qpdf to rotate pages" is honest;
-//     silently degrading the whole file is not.
+//   * TWO ENGINES, chosen by what is installed. qpdf edits a PDF's page tree
+//     in place: a reorder is an object-level rewrite and a rotation is a
+//     metadata change, so the outline, form fields and annotations survive.
+//     Without qpdf the only route is pdfseparate + pdfunite, which copies page
+//     content but REBUILDS the document — outline, form fields, cross-page
+//     annotations and encryption do not survive. That cost is stated in the UI
+//     before a write (shared/doc.ts PDF_REBUILD_WARNING), and PdfInfo.engine
+//     tells the pane which of the two it is talking to, so the warning is shown
+//     only when it is actually true.
+//   * Rotation needs qpdf and is offered only with it. Ghostscript could do it,
+//     but only by re-interpreting and re-emitting every page — recompressing
+//     images and subsetting fonts across a document the user asked to turn one
+//     page of. A disabled control that says "Install qpdf to rotate pages" is
+//     honest; silently degrading the whole file is not.
 //   * Encrypted PDFs are refused outright. pdfinfo reports Encrypted: yes for
 //     an owner-password file and exits non-zero on a user-password one; both
 //     are refused, and there is no password prompt in v1.
@@ -38,6 +41,7 @@ import {
   type PdfResult, type PdfThumb, type PdfThumbs,
 } from '../../shared/doc'
 import { TEST_PROFILE, TEST_ROOT } from '../state/settings'
+import { resolveTools } from '../platform/tools'
 import * as history from '../state/history'
 
 // ---------------------------------------------------------------- child procs
@@ -77,20 +81,61 @@ function run(bin: string, args: string[], timeoutMs: number = DOC.childTimeoutMs
   })
 }
 
-let qpdfPromise: Promise<boolean> | null = null
-/** qpdf is what rotation would need. Checked once, not assumed either way:
- *  this is exactly the sort of thing that gets installed later. */
-function hasQpdf(): Promise<boolean> {
-  if (!qpdfPromise) {
-    qpdfPromise = new Promise<boolean>(resolve => {
-      try {
-        const c = spawn('qpdf', ['--version'], { stdio: 'ignore' })
-        c.on('error', () => resolve(false))
-        c.on('close', code => resolve(code === 0))
-      } catch { resolve(false) }
-    })
+/**
+ * qpdf is what rotation needs, and what makes a reorder lossless.
+ *
+ * This used to spawn `qpdf --version` itself. It now goes through the shared
+ * capability probe (platform/tools.ts), which is the single place that answers
+ * "is this tool here, and what is it called on this distribution" — three
+ * modules resolving ImageMagick independently is how `identify` ended up
+ * hard-coded and silently missing on Arch. The probe caches for the life of the
+ * process, so a qpdf installed WHILE the app is running is picked up at the
+ * next restart rather than immediately; that is the same deal every other tool
+ * here gets.
+ */
+function hasQpdf(): boolean {
+  return !!resolveTools().qpdf
+}
+
+/**
+ * Reorder, delete and rotate in one qpdf command.
+ *
+ * qpdf edits the page tree rather than rebuilding the document, so the outline,
+ * form fields and annotations survive — the whole reason PDF_REBUILD_WARNING
+ * exists is the poppler fallback below, not this path.
+ *
+ * Two details that are not guessable:
+ *   * --rotate page ranges are OUTPUT-relative, while the caller thinks in
+ *     source pages ("I turned page 3"), so the map is inverted here. Verified:
+ *     `--rotate=+90:1 --pages . 3,1` turns source page 3.
+ *   * qpdf exits 3, not 0, when it merely warns — and a PDF that makes it warn
+ *     is completely ordinary. Treating 3 as failure would refuse to edit a
+ *     large share of real documents, so the page count of the file it wrote is
+ *     the evidence, as everywhere else in this module.
+ */
+async function applyWithQpdf(
+  src: string, tmp: string, order: number[], rotate: Record<number, number> | undefined,
+): Promise<{ ok: boolean; error?: string }> {
+  const args = [src, '--pages', '.', order.join(','), '--']
+  if (rotate) {
+    const byDelta = new Map<number, number[]>()
+    for (let i = 0; i < order.length; i++) {
+      const turn = ((Math.round(rotate[order[i]] ?? 0) % 360) + 360) % 360
+      if (!turn) continue
+      const list = byDelta.get(turn) ?? []
+      list.push(i + 1)                       // output page number
+      byDelta.set(turn, list)
+    }
+    for (const [turn, pages] of byDelta) args.push(`--rotate=+${turn}:${pages.join(',')}`)
   }
-  return qpdfPromise
+  args.push(tmp)
+
+  const r = await run(resolveTools().qpdf, args, 120_000)
+  if (r.timedOut) return { ok: false, error: 'qpdf did not finish in time, so nothing was changed.' }
+  if (r.code !== 0 && r.code !== 3) {
+    return { ok: false, error: r.stderr.split('\n').find(Boolean) || 'qpdf could not rewrite this PDF.' }
+  }
+  return { ok: true }
 }
 
 /** stat() on a dead CIFS mount blocks forever (see platform/protocols.ts). */
@@ -119,9 +164,10 @@ function field(out: string, key: string): string | undefined {
 }
 
 export async function pdfDocInfo(p: string): Promise<PdfInfo> {
-  const base: PdfInfo = { ok: false, pages: 0, encrypted: false, needsPassword: false, canRotate: false }
+  const engine: PdfInfo['engine'] = hasQpdf() ? 'qpdf' : 'poppler'
+  const base: PdfInfo = { ok: false, pages: 0, encrypted: false, needsPassword: false, canRotate: false, engine }
   if (!p || !p.startsWith('/')) return { ...base, error: 'Not a file on this computer.' }
-  const canRotate = await hasQpdf()
+  const canRotate = hasQpdf()
   const r = await run('pdfinfo', ['-enc', 'UTF-8', '--', p], 15_000)
   if (r.timedOut) return { ...base, canRotate, error: 'This PDF did not answer in time — the drive it is on may be disconnected.' }
   if (r.code !== 0) {
@@ -149,6 +195,7 @@ export async function pdfDocInfo(p: string): Promise<PdfInfo> {
     version: field(r.stdout, 'PDF version'),
     fileSize: Number(/^File size:\s*(\d+)/mi.exec(r.stdout)?.[1] ?? 0) || undefined,
     canRotate,
+    engine,
     error: pages > 0 ? undefined : 'This PDF reports no pages.',
   }
 }
@@ -364,20 +411,32 @@ export async function pdfApplyPages(req: PdfPagesRequest): Promise<PdfResult> {
   // with its destination for the rename to be atomic
   const scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'liqpdf-'))
   try {
-    const lo = Math.min(...order)
-    const hi = Math.max(...order)
-    const sep = await run('pdfseparate', ['-f', String(lo), '-l', String(hi), '--', src, path.join(scratch, 'p-%d.pdf')], 120_000)
-    const parts = order.map(n => path.join(scratch, `p-${n}.pdf`))
-    for (const part of parts) {
-      if (!await wroteSomething(part)) {
-        return { ok: false, error: sep.stderr.split('\n')[0] || 'The pages could not be split out of this PDF.' }
+    if (hasQpdf()) {
+      // one command, page tree edited in place, outline and form fields intact
+      const q = await applyWithQpdf(src, tmp, order, req.rotate)
+      if (!q.ok || !await wroteSomething(tmp)) {
+        await fsp.rm(tmp, { force: true }).catch(() => {})
+        return { ok: false, error: q.error || 'The new PDF could not be written.' }
       }
-    }
+    } else {
+      if (req.rotate && Object.values(req.rotate).some(v => v % 360 !== 0)) {
+        return { ok: false, error: 'Rotating pages needs qpdf, which is not installed.' }
+      }
+      const lo = Math.min(...order)
+      const hi = Math.max(...order)
+      const sep = await run('pdfseparate', ['-f', String(lo), '-l', String(hi), '--', src, path.join(scratch, 'p-%d.pdf')], 120_000)
+      const parts = order.map(n => path.join(scratch, `p-${n}.pdf`))
+      for (const part of parts) {
+        if (!await wroteSomething(part)) {
+          return { ok: false, error: sep.stderr.split('\n')[0] || 'The pages could not be split out of this PDF.' }
+        }
+      }
 
-    const uni = await run('pdfunite', [...parts, tmp], 120_000)
-    if (!await wroteSomething(tmp)) {
-      await fsp.rm(tmp, { force: true }).catch(() => {})
-      return { ok: false, error: uni.stderr.split('\n')[0] || 'The new PDF could not be written.' }
+      const uni = await run('pdfunite', [...parts, tmp], 120_000)
+      if (!await wroteSomething(tmp)) {
+        await fsp.rm(tmp, { force: true }).catch(() => {})
+        return { ok: false, error: uni.stderr.split('\n')[0] || 'The new PDF could not be written.' }
+      }
     }
     // verify the RESULT, not the exit code: a truncated or wrong-length
     // document is exactly the failure a 0 exit would hide

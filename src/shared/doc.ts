@@ -115,6 +115,14 @@ export interface PdfInfo {
   fileSize?: number
   /** rotation needs qpdf; Ghostscript would re-render the whole document */
   canRotate: boolean
+  /**
+   * Which tool will perform a write. qpdf edits the page tree, so a reorder
+   * keeps the outline and form fields; the poppler fallback
+   * (pdfseparate+pdfunite) rebuilds the document and loses them. The pane shows
+   * PDF_REBUILD_WARNING only for 'poppler', because on a machine with qpdf the
+   * warning is simply untrue.
+   */
+  engine: 'qpdf' | 'poppler'
 }
 
 export interface PdfThumb {
@@ -143,6 +151,18 @@ export interface PdfPagesRequest {
   dest: DocDest
   /** file-name suffix for a copy: "book (edited).pdf" / "book (pages).pdf" */
   suffix?: string
+  /**
+   * Quarter-turns clockwise to add to a SOURCE page, keyed by source page
+   * number. Relative to however the page is already rotated, so applying the
+   * same edit twice is not a way to end up at 180.
+   *
+   * Keyed by source rather than output page because that is what the strip
+   * shows: turn page 3, then move it, and it is still page 3 that is turned.
+   * qpdf's own --rotate ranges are OUTPUT-relative, so the mapping happens at
+   * the point the command is built (verified: `--rotate=+90:1 --pages . 3,1`
+   * turns output page 1, i.e. source page 3).
+   */
+  rotate?: Record<number, number>
 }
 
 export interface PdfMergeRequest {
@@ -169,3 +189,25 @@ export const PDF_REBUILD_WARNING =
   'Rebuilding drops the outline (bookmarks), form fields, annotations that '
   + 'point across pages, and any encryption. The page content itself is copied '
   + 'as-is, not re-rendered.'
+
+/**
+ * Does this mime name a file the text editor can open?
+ *
+ * ONE definition, imported by both the Doc page and the tab strip that decides
+ * whether the Doc tab is even offered. They had a copy each, which is how
+ * broadening one of them changed nothing: the editor would happily have opened
+ * a .nemo_action, but the strip kept the tab greyed out so it was never asked.
+ *
+ * The `application/` list is not decoration — plain-text formats are routinely
+ * given an application/* type by shared-mime-info. The case that forced it was
+ * this app's own extensions (application/nemo-action), which "New extension…"
+ * creates and the user immediately wants to edit.
+ */
+const TEXTUAL = new RegExp('^(text/'
+  + '|application/(json|xml|x-sh|javascript|toml|yaml|x-yaml|x-shellscript'
+  + '|nemo-action|x-desktop|x-perl|x-python|x-ruby|x-awk|x-m4|sql)'
+  + '|application/[\\w.+-]+\\+(json|xml))')
+
+export function isTextualMime(mime: string): boolean {
+  return TEXTUAL.test(mime || '')
+}

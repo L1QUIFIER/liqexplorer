@@ -166,3 +166,29 @@
 .ins-narrow .dc-strip { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
 .ins-narrow .dc-head { padding: 8px 8px 6px; }
 .ins-narrow .dc-foot { padding: 6px 8px 8px; }
+
+/* ------------------------------------------------------------------- undo */
+
+/* undo sits above the tools it undoes, and stays visible while a long file
+   scrolls, because it is wanted at the moment something went wrong */
+.dc-undorow { margin-bottom: 2px; }
+.dc-undorow .dc-btn { flex: 0 1 auto; }
+.dc-undosave {
+  flex: 1 1 auto;
+  border-color: var(--accent-light);
+  color: var(--accent-text, var(--text-primary));
+}
+.dc-undosave[hidden] { display: none; }
+
+/* A rotated page thumbnail. The card holds a fixed 51:66 portrait box, so a
+   quarter turn has to be scaled back by that ratio or the landscape result
+   overflows the card and overlaps its neighbour. 180 needs no scale. */
+.dc-pg-img { transition: transform 90ms ease-out; }
+.dc-pg-img.rot-90  { transform: rotate(90deg)  scale(0.7727); }
+.dc-pg-img.rot-180 { transform: rotate(180deg); }
+.dc-pg-img.rot-270 { transform: rotate(270deg) scale(0.7727); }
+
+.dc-strip:focus-visible { outline: 1px solid var(--accent-light); outline-offset: -2px; }
+
+/* the two rotate buttons are icons, so they must not take a share of the row */
+.dc-rot { flex: 0 0 auto; padding: 4px 9px; font-size: 13px; line-height: 1; }

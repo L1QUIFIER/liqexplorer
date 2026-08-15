@@ -10,9 +10,11 @@
 
 import { execFile, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { AppCandidate, FileEntry } from '../../shared/types'
+import { mimeForName } from '../fs/mime'
 
 interface DesktopApp {
   id: string
@@ -237,14 +239,67 @@ export async function listAllApps(): Promise<AppCandidate[]> {
   return out
 }
 
+/**
+ * Open a file or folder with the application that should handle it.
+ *
+ * THIS DOES NOT USE `gio open` FOR FILES, and that is the whole point.
+ *
+ * `gio open <path>` turns the path into a file:// URI, and GIO then resolves
+ * that URI through the **x-scheme-handler/file** association before it ever
+ * looks at the file's content type. bin/install-default.sh deliberately points
+ * x-scheme-handler/file at LiqExplorer so that "open this location" requests
+ * from other applications arrive here — with the result that `gio open
+ * notes.txt` launched LiqExplorer instead of the text editor. Every
+ * double-click on a non-media file opened another file manager window
+ * (measured: `gio open probe.txt` spawned a second electron instance, with
+ * text/plain correctly associated to org.x.editor.desktop the whole time).
+ *
+ * So a regular file is resolved HERE, against the same desktop database the
+ * "Open with" menu uses, and launched with `gio launch`, which takes a desktop
+ * file and never consults a scheme handler. A directory still goes through
+ * `gio open`, because for a directory arriving at this app IS the right answer.
+ */
 export async function openPath(p: string): Promise<{ ok: boolean; error?: string }> {
   try {
+    let isDir = false
+    try { isDir = (await fsp.stat(p)).isDirectory() } catch { /* gone or unreadable */ }
+
+    if (!isDir) {
+      const target = await defaultAppFor(p)
+      if (target) {
+        spawn('gio', ['launch', target, p], { detached: true, stdio: 'ignore' }).unref()
+        return { ok: true }
+      }
+      // Nothing claims it. gio open is still the better fallback than nothing —
+      // it may find something this database missed — but it can also come back
+      // to us through the scheme handler, so say what happened if it does.
+    }
     spawn('gio', ['open', p], { detached: true, stdio: 'ignore' }).unref()
     return { ok: true }
   } catch (e: any) {
     return { ok: false, error: String(e?.message ?? e) }
   }
 }
+
+/**
+ * The .desktop file that should open this path, or '' when nothing suitable
+ * exists. Never returns this application: opening a FILE in a file manager is
+ * the loop this exists to break.
+ */
+async function defaultAppFor(p: string): Promise<string> {
+  const mime = mimeForName(path.basename(p), false)
+  const candidates = await listAppsFor(mime)
+  const d = loadDb()
+  for (const c of candidates) {
+    if (SELF_IDS.has(c.id)) continue
+    const app = d.apps.get(c.id)
+    if (app?.file) return app.file
+  }
+  return ''
+}
+
+/** desktop ids that are this application, in any of its installed spellings */
+const SELF_IDS = new Set(['liqexplorer.desktop'])
 
 export async function openWith(p: string, appId: string): Promise<void> {
   const d = loadDb()

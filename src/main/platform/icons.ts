@@ -1,7 +1,10 @@
 // Freedesktop icon-theme lookup (icon-theme spec) without GTK.
 //
-// Theme comes from `gsettings get org.cinnamon.desktop.interface icon-theme`
-// (Papirus on this machine). We parse index.theme of the theme plus its
+// The theme name is whatever THIS desktop records it as — gsettings for
+// Cinnamon/GNOME/MATE, kdeglobals for Plasma, GTK settings.ini for the bare
+// window managers common on Arch — and the first candidate that proves it can
+// resolve mimetype icons wins (see candidateThemes/buildChain). We parse
+// index.theme of the theme plus its
 // Inherits chain (implicit hicolor last) and resolve icon names to files:
 // per theme: exact size match -> scalable -> closest size; extensions svg/png;
 // absolute paths pass through; /usr/share/pixmaps is the final fallback.
@@ -46,15 +49,81 @@ function baseDirs(): string[] {
 
 // ---------- gsettings ----------
 
-function readThemeName(): string {
+/** the gsettings schemas that carry an icon-theme key, most specific first */
+const GS_SCHEMAS = [
+  'org.cinnamon.desktop.interface',   // Cinnamon (Mint)
+  'org.gnome.desktop.interface',      // GNOME, and most GTK desktops
+  'org.mate.interface',               // MATE
+]
+
+function gsettingsGet(schema: string, key: string): string {
   try {
-    const out = execFileSync('gsettings',
-      ['get', 'org.cinnamon.desktop.interface', 'icon-theme'],
-      { encoding: 'utf8', timeout: 3000 })
-    const name = out.trim().replace(/^'+|'+$/g, '')
-    if (name) return name
-  } catch { /* fall through */ }
-  return 'Papirus'
+    return execFileSync('gsettings', ['get', schema, key], { encoding: 'utf8', timeout: 3000 })
+  } catch { return '' }
+}
+
+/** value of `key=` in a section of an ini file; '' when absent */
+function iniValue(file: string, section: string, key: string): string {
+  let text: string
+  try { text = fs.readFileSync(file, 'utf8') } catch { return '' }
+  let inSection = section === ''
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (line.startsWith('[')) { inSection = line.slice(1, -1).trim() === section; continue }
+    if (!inSection) continue
+    const eq = line.indexOf('=')
+    if (eq < 0) continue
+    if (line.slice(0, eq).trim() === key) return line.slice(eq + 1).trim()
+  }
+  return ''
+}
+
+/**
+ * Every place a desktop might record the icon theme, best first.
+ *
+ * This used to be one gsettings call against org.cinnamon.desktop.interface
+ * with a hard-coded fallback to 'Papirus'. On anything that is not Cinnamon the
+ * call throws (no such schema), and on a machine without Papirus installed the
+ * fallback names a theme that is not there — so the chain came out empty but
+ * for hicolor, which carries almost no mimetype icons. The symptom is a file
+ * manager with no file icons at all, which is exactly what Arch showed.
+ *
+ * KDE does not use gsettings for this at all (kdeglobals), and bare window
+ * managers — a large share of Arch installs — usually set it only in GTK's
+ * settings.ini. Both are consulted here.
+ */
+function candidateThemes(): string[] {
+  const out: string[] = []
+  const push = (v: string): void => {
+    const name = v.trim().replace(/^'+|'+$/g, '').replace(/^"+|"+$/g, '')
+    if (name && !out.includes(name)) out.push(name)
+  }
+  const h = os.homedir()
+  const fromGsettings = (): void => { for (const s of GS_SCHEMAS) push(gsettingsGet(s, 'icon-theme')) }
+  const fromKde = (): void => {
+    push(iniValue(path.join(h, '.config/kdeglobals'), 'Icons', 'Theme'))
+    push(iniValue('/etc/xdg/kdeglobals', 'Icons', 'Theme'))
+  }
+  const fromGtk = (): void => {
+    for (const f of [
+      path.join(h, '.config/gtk-4.0/settings.ini'),
+      path.join(h, '.config/gtk-3.0/settings.ini'),
+      '/etc/gtk-3.0/settings.ini',
+      '/usr/share/gtk-3.0/settings.ini',
+    ]) push(iniValue(f, 'Settings', 'gtk-icon-theme-name'))
+    // gtkrc-2.0 is not sectioned: gtk-icon-theme-name="Adwaita"
+    push(iniValue(path.join(h, '.gtkrc-2.0'), '', 'gtk-icon-theme-name'))
+  }
+
+  const desktop = (process.env.XDG_CURRENT_DESKTOP || process.env.DESKTOP_SESSION || '').toLowerCase()
+  if (/kde|plasma|lxqt/.test(desktop)) { fromKde(); fromGtk(); fromGsettings() }
+  else { fromGsettings(); fromGtk(); fromKde() }
+
+  // Last resort: name themes that are WIDELY INSTALLED rather than one guess.
+  // Adwaita ships with GTK and breeze with Plasma, so on a desktop system one
+  // of these is nearly always present even when nothing is configured.
+  for (const n of ['Papirus', 'Adwaita', 'breeze', 'Numix', 'elementary', 'gnome', 'oxygen', 'hicolor']) push(n)
+  return out
 }
 
 // ---------- index.theme parsing ----------
@@ -124,15 +193,15 @@ function parseIndexTheme(name: string): Theme | null {
 let chain: Theme[] | null = null
 let monitor: ChildProcess | null = null
 
-function buildChain(): Theme[] {
+function chainFor(name: string): Theme[] {
   const out: Theme[] = []
   const seen = new Set<string>()
-  const queue = [readThemeName()]
+  const queue = [name]
   while (queue.length) {
-    const name = queue.shift()!
-    if (seen.has(name)) continue
-    seen.add(name)
-    const t = parseIndexTheme(name)
+    const n = queue.shift()!
+    if (seen.has(n)) continue
+    seen.add(n)
+    const t = parseIndexTheme(n)
     if (t) {
       out.push(t)
       queue.push(...t.inherits)
@@ -145,6 +214,69 @@ function buildChain(): Theme[] {
   return out
 }
 
+/**
+ * Can this chain actually draw a file listing?
+ *
+ * A theme directory can exist, parse, and still be useless here — hicolor is
+ * the standard example, since packages drop application icons into it but it
+ * carries no mimetype set. Resolving a configured-but-missing theme to "well,
+ * hicolor is there" is what produced a window full of blank rows, so the chain
+ * has to prove it can find the icons a file manager is made of before it is
+ * accepted.
+ */
+function usableChain(themes: Theme[]): boolean {
+  if (!themes.length) return false
+  for (const probe of ['inode-directory', 'folder', 'text-x-generic', 'text-plain']) {
+    for (const t of themes) if (lookupInTheme(t, probe, 48)) return true
+  }
+  return false
+}
+
+/** which theme the chain came from, and whether it was the one configured */
+let chosenTheme = ''
+let configuredTheme = ''
+
+function buildChain(): Theme[] {
+  const candidates = candidateThemes()
+  configuredTheme = candidates[0] ?? ''
+  for (const name of candidates) {
+    const c = chainFor(name)
+    if (usableChain(c)) { chosenTheme = name; return c }
+  }
+  // Nothing on this machine has mimetype icons. Report it rather than pretend:
+  // iconReport() turns this into a named missing dependency in the UI.
+  chosenTheme = ''
+  return chainFor('hicolor')
+}
+
+export interface IconReport {
+  /** the theme actually in use, '' when none could be found */
+  theme: string
+  /** what the desktop asked for, which may not be installed */
+  configured: string
+  /** theme names present under any icon base directory */
+  installed: string[]
+  ok: boolean
+}
+
+export function iconReport(): IconReport {
+  ensureInit()
+  const installed = new Set<string>()
+  for (const base of baseDirs()) {
+    let names: string[] = []
+    try { names = fs.readdirSync(base) } catch { continue }
+    for (const n of names) {
+      try { if (fs.statSync(path.join(base, n, 'index.theme')).isFile()) installed.add(n) } catch { /* not a theme */ }
+    }
+  }
+  return {
+    theme: chosenTheme,
+    configured: configuredTheme,
+    installed: [...installed].sort(),
+    ok: !!chosenTheme,
+  }
+}
+
 function ensureInit(): Theme[] {
   if (chain) return chain
   chain = buildChain()
@@ -154,11 +286,16 @@ function ensureInit(): Theme[] {
 
 function startMonitor(): void {
   if (monitor) return
+  // Watch the schema this desktop actually has. Monitoring the Cinnamon one
+  // unconditionally (what this did) exits immediately anywhere else, so a theme
+  // change went unnoticed until the app was restarted.
+  const schema = GS_SCHEMAS.find(s => gsettingsGet(s, 'icon-theme').trim())
+  if (!schema) return
   try {
     monitor = spawn('gsettings',
-      ['monitor', 'org.cinnamon.desktop.interface', 'icon-theme'],
+      ['monitor', schema, 'icon-theme'],
       { stdio: ['ignore', 'pipe', 'ignore'] })
-    monitor.stdout!.on('data', () => clearCache())
+    monitor.stdout!.on('data', () => { chain = null; clearCache() })
     monitor.on('error', () => { monitor = null })
     monitor.on('exit', () => { monitor = null })
     monitor.unref()

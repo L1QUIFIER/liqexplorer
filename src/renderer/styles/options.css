@@ -175,3 +175,70 @@
   color: var(--text-secondary);
   line-height: 1.35;
 }
+
+/* ------------------------------------------------------------- extensions */
+
+.opt-exts { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.opt-exts-actions { display: flex; gap: 6px; }
+
+.opt-ext {
+  border: 1px solid var(--stroke);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+}
+/* an extension that cannot run reads as a problem, not as a choice */
+.opt-ext.is-blocked { border-left-color: var(--danger); }
+/* one the user switched off is quiet, but still legible */
+.opt-ext.is-off { opacity: 0.6; border-left-color: var(--stroke-strong); }
+
+.opt-ext-head { display: flex; align-items: center; gap: 8px; }
+.opt-ext-toggle { flex: none; }
+.opt-ext-name { font-weight: 600; flex: 1; min-width: 0; }
+.opt-ext-src {
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.opt-ext-applies { font-size: var(--fs-caption); color: var(--text-secondary); margin-top: 2px; }
+.opt-ext-bad { font-size: var(--fs-caption); color: var(--danger); margin-top: 4px; }
+.opt-ext-exec { margin-top: 4px; overflow-x: auto; }
+.opt-ext-exec code {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  white-space: pre;
+}
+
+/* ------------------------------------------------------- extension store */
+
+.opt-ext-nav { display: flex; gap: 4px; margin-bottom: 10px; }
+.opt-ext-nav-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: var(--bg-content);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--fs-body);
+}
+.opt-ext-nav-btn.active {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  border-color: var(--accent-light);
+}
+
+.opt-store-search { display: flex; gap: 6px; margin: 8px 0; }
+.opt-store-search .opt-search-input { flex: 1; min-width: 0; }
+
+.opt-ext-icon { width: 24px; height: 24px; flex: none; object-fit: contain; }
+.opt-ext-score { flex: none; font-size: var(--fs-caption); color: var(--text-secondary); }
+.opt-ext-buttons { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+.opt-ext-have { font-size: var(--fs-caption); color: var(--text-secondary); flex: 1; }
+/* already installed: quiet, so the ones you could add stand out */
+.opt-ext.is-installed { border-left-color: var(--stroke-strong); }
+.opt-ext-find { font-size: var(--fs-caption); color: var(--text-secondary); margin-right: 6px; }

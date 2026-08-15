@@ -6,12 +6,13 @@
 // #main and swaps with it whenever the active tab sits at home:// — the view
 // host keeps owning every real folder listing.
 import { app, liq, HOME_URI, Tab } from '../core/app'
-import type { FavoriteEntry, Place, RecentEntry } from '../../shared/types'
+import type { FavoriteEntry, FileEntry, Place, RecentEntry } from '../../shared/types'
 import { PUSH } from '../../shared/ipc'
 import { formatDate } from '../../shared/sort'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
 import { escapeHtml, iconURL } from './items'
+import { openInMediaViewer } from '../media/overlay'
 
 const RECENT_LIMIT = 25
 const TILE_ICON = 32
@@ -229,6 +230,50 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     name: string
     isDir: boolean
     menu: (x: number, y: number) => void
+    /** the other files in the same section, so ←/→ can walk them in the viewer */
+    siblings?: { path: string; name: string; mime?: string }[]
+    /** a real mime when the source knows one (Recent does); beats the guesser */
+    mime?: string
+  }
+
+  /**
+   * A FileEntry good enough to decide how to open something.
+   *
+   * Home tiles are built from Quick access / Favorites / Recent, none of which
+   * carry a stat — only a path and a name. The media viewer needs six fields
+   * (path, name, ext, mime, size, isDir) and uses size for display, not for the
+   * decision, so a synthesised entry answers the question correctly without a
+   * stat per tile on a page that may be showing a dead network mount.
+   */
+  function synthEntry(p: string, name: string, known?: string): FileEntry {
+    const mime = known && known !== 'application/octet-stream' ? known : mimeGuess(name)
+    return {
+      name, path: p, isDir: false, isSymlink: false,
+      size: -1, mtime: 0, ctime: 0, mime,
+      icons: iconsForMime(mime),
+      hidden: name.startsWith('.'),
+      ext: (name.split('.').pop() ?? '').toLowerCase(),
+    }
+  }
+
+  /**
+   * Open a file from a Home tile the way the file list would.
+   *
+   * This used to be a bare `liq.openPath`, which had two faults. The visible one
+   * was that openPath went through `gio open`, and with LiqExplorer registered
+   * for x-scheme-handler/file GIO resolved every file:// URI back to this app —
+   * so double-clicking anything here opened another Explorer window instead of
+   * the file (fixed in main/platform/apps.ts, which no longer routes files
+   * through the scheme handler). The second is that it skipped the in-app
+   * viewer entirely, so a photo in Recent opened in an external program while
+   * the same photo in a folder opened in the pane — the setting said one thing
+   * and two paths in the app did different things.
+   */
+  function openFile(o: ItemOpts): void {
+    const rows = (o.siblings ?? [{ path: o.path, name: o.name, mime: o.mime }])
+      .map(s => synthEntry(s.path, s.name, s.mime))
+    if (openInMediaViewer(synthEntry(o.path, o.name, o.mime), rows)) return
+    void liq.openPath(o.path)
   }
 
   function wireItem(el: HTMLElement, o: ItemOpts): void {
@@ -242,10 +287,10 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     // double-click, unless the user asked for single-click opening
     el.addEventListener('click', () => {
       if (o.isDir) navigate(o.path)
-      else if (app.settings.singleClickOpen) void liq.openPath(o.path)
+      else if (app.settings.singleClickOpen) openFile(o)
     })
     el.addEventListener('dblclick', () => {
-      if (!o.isDir && !app.settings.singleClickOpen) void liq.openPath(o.path)
+      if (!o.isDir && !app.settings.singleClickOpen) openFile(o)
     })
     el.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault() })
     el.addEventListener('auxclick', (e) => {
@@ -254,7 +299,7 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
     el.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return
       e.preventDefault()
-      if (o.isDir) navigate(o.path); else void liq.openPath(o.path)
+      if (o.isDir) navigate(o.path); else openFile(o)
     })
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault()
@@ -378,7 +423,7 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
   function fileMenu(path: string, source: 'favorite' | 'recent'): (x: number, y: number) => void {
     return (x, y) => {
       const items: MenuItem[] = [
-        { label: 'Open', onClick: () => { void liq.openPath(path) } },
+        { label: 'Open', onClick: () => openFile({ path, name: path.split('/').pop() ?? path, isDir: false, menu: () => {} }) },
         { label: 'Open file location', onClick: () => { void openFileLocation(path) } },
         { separator: true },
         source === 'favorite'
@@ -423,7 +468,12 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
       const tile = makeTile(f.name, iconsForMime(mimeGuess(f.name)), false)
       tile.classList.add('home-tile-file')
       tile.title = f.path
-      wireItem(tile, { path: f.path, name: f.name, isDir: false, menu: fileMenu(f.path, 'favorite') })
+      wireItem(tile, {
+        path: f.path, name: f.name, isDir: false, menu: fileMenu(f.path, 'favorite'),
+        // the rest of Favorites becomes the viewer's playlist, so ←/→ walks the
+        // section the way it walks a folder
+        siblings: files.map(x => ({ path: x.path, name: x.name })),
+      })
       grid.appendChild(tile)
     }
     body.appendChild(grid)
@@ -489,7 +539,10 @@ export function mountHome(root: HTMLElement, opts: HomeHostOpts = {}): void {
       when.textContent = relTime(r.visitedAt)
       when.title = r.visitedAt ? formatDate(r.visitedAt) : ''
       row.append(img, name, dir, when)
-      wireItem(row, { path: r.path, name: r.name, isDir: false, menu: fileMenu(r.path, 'recent') })
+      wireItem(row, {
+        path: r.path, name: r.name, isDir: false, mime: r.mime, menu: fileMenu(r.path, 'recent'),
+        siblings: recents.map(x => ({ path: x.path, name: x.name, mime: x.mime })),
+      })
       list.appendChild(row)
     }
     body.appendChild(list)

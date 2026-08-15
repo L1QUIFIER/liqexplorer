@@ -22,6 +22,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { CH } from '../../shared/ipc'
 import type { ToolReport, ToolStatus } from '../../shared/tools'
+import { iconReport } from './icons'
 
 /** on PATH? cheap, synchronous, no process spawned */
 function onPath(bin: string): boolean {
@@ -223,6 +224,20 @@ const INSTALL: Record<string, string> = {
   dnf: 'sudo dnf install',
 }
 
+/** icon themes are packaged, so a missing one has an install command too */
+const ICON_PKG = { apt: 'papirus-icon-theme', pacman: 'papirus-icon-theme', dnf: 'papirus-icon-theme' }
+
+function iconStatus(pm: ReturnType<typeof packageManager>): ToolReport['icons'] {
+  const r = iconReport()
+  return {
+    theme: r.theme,
+    configured: r.configured,
+    ok: r.ok,
+    installedCount: r.installed.length,
+    install: r.ok || pm === 'unknown' ? '' : `${INSTALL[pm]} ${ICON_PKG[pm]}`,
+  }
+}
+
 export function toolReport(): ToolReport {
   const pm = packageManager()
   const t = resolveTools()
@@ -240,7 +255,13 @@ export function toolReport(): ToolReport {
       install: have || !pkg ? '' : `${INSTALL[pm]} ${pkg}`,
     }
   })
-  return { distro: distroName(), packageManager: pm, items }
+  return {
+    distro: distroName(),
+    desktop: process.env.XDG_CURRENT_DESKTOP || process.env.DESKTOP_SESSION || 'unknown',
+    packageManager: pm,
+    items,
+    icons: iconStatus(pm),
+  }
 }
 
 function foundName(key: string, t: Resolved): string {

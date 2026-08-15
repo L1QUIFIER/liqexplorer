@@ -20,6 +20,7 @@ import './platform/contactsheet'             // self-registers contactSheet
 import './platform/nemoactions'              // self-registers nemoActions / runNemoAction
 import './fs/sniff'                          // self-registers identifyFile
 import './platform/tools'                    // self-registers toolReport
+import './platform/extstore'                 // self-registers the extension store
 import './ops/imageedit'   // self-registers applyEdit
 import './ops/dropbins'     // self-registers binsGet/binsSet/convertImages/checksumsRun
 import './platform/mediainfo' // self-registers fileFacts/fileFactsMany (Details tab)
@@ -113,6 +114,8 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     await loadSettings()
+    const caps = await probeCapabilities()
+    logCapabilities(caps)
     initTheme()
     initClipboard()
     registerProtocols()

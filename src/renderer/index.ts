@@ -10,6 +10,7 @@ import { mountPreviewPane } from './views/preview'
 import { mountMenus } from './menus/context-menus'
 import { mountDialogs } from './dialogs/dialogs'
 import { mountKeyboard } from './core/keyboard'
+import { mountStartupNotice } from './chrome/notice'
 import { mountScrollHover } from './core/scrollhover'
 // side-effect import: views/dropbins.ts builds its own container and injects
 // its own stylesheet at import time, so it has no mount function to call
@@ -45,6 +46,8 @@ async function boot() {
   mountDialogs()
   mountKeyboard()
   mountScrollHover()
+  // last: it asks main for the capability report and may add a bar
+  mountStartupNotice()
 }
 
 boot().catch(err => {

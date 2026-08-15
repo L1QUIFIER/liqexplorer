@@ -16,6 +16,7 @@
 // bitmap) implements suspend() and is told when it goes off screen.
 import { app } from '../../core/app'
 import type { Tab } from '../../core/app'
+import { isTextualMime } from '../../../shared/doc'
 import type { FileEntry } from '../../../shared/types'
 
 export type InspectorTabId = 'preview' | 'details' | 'rename' | 'edit' | 'doc'
@@ -77,10 +78,9 @@ function isEditableImage(e: FileEntry | undefined): boolean {
   return !!e && !e.isDir && e.path.startsWith('/') && EDITABLE_IMAGE.has(e.ext)
 }
 
-const TEXTY = /^(text\/|application\/(json|xml|x-sh|javascript|toml|yaml|x-yaml))/
 function isDocument(e: FileEntry | undefined): boolean {
   if (!e || e.isDir || !e.path.startsWith('/')) return false
-  return e.ext === 'pdf' || TEXTY.test(e.mime || '')
+  return e.ext === 'pdf' || isTextualMime(e.mime || '')
 }
 
 export function mountInspector(root: HTMLElement, previewPage: HTMLElement): InspectorHandle {

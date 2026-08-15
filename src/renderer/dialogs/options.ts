@@ -9,6 +9,8 @@ import { DEFAULT_SMART_RULES } from '../../shared/types'
 import { PUSH } from '../../shared/ipc'
 import { PEEK } from '../../shared/peek'
 import type { ToolReport } from '../../shared/tools'
+import type { ExtensionInfo } from '../../shared/nemo'
+import type { ExtensionPreview, InstallResult, StoreEntry, StoreIndex } from '../../shared/extstore'
 import { app, liq } from '../core/app'
 import { formatSize, formatDate } from '../../shared/sort'
 import { openModal, el, closeX } from './dialogs'
@@ -29,7 +31,7 @@ export function mountOptions(): void {
   app.on('show-options', (tab?: OptionsTab) => { void show(tab) })
 }
 
-type OptionsTab = 'general' | 'view' | 'search' | 'system'
+type OptionsTab = 'general' | 'view' | 'search' | 'system' | 'extensions'
 
 async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   if (openCount) return                   // one Options window, like Explorer
@@ -71,10 +73,12 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   const view = el('div', 'opt-panel')
   const search = el('div', 'opt-panel')
   const system = el('div', 'opt-panel')
-  body.append(general, view, search, system)
+  const extensions = el('div', 'opt-panel')
+  body.append(general, view, search, system, extensions)
 
   const panels: [string, HTMLElement][] = [
-    ['General', general], ['View', view], ['Search', search], ['System', system]]
+    ['General', general], ['View', view], ['Search', search],
+    ['System', system], ['Extensions', extensions]]
   const tabBtns = panels.map(([label]) => el('button', 'dlg-tab', label))
   const select = (i: number): void => {
     tabBtns.forEach((b, k) => b.classList.toggle('active', k === i))
@@ -86,7 +90,9 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   buildView(view)
   offStatus = buildSearch(search, () => modal.closed)
   buildSystem(system)
-  select(initialTab === 'view' ? 1 : initialTab === 'search' ? 2 : initialTab === 'system' ? 3 : 0)
+  buildExtensions(extensions, close)
+  select(initialTab === 'view' ? 1 : initialTab === 'search' ? 2
+    : initialTab === 'system' ? 3 : initialTab === 'extensions' ? 4 : 0)
 
   // ---- search over everything the panels just built ----
   //
@@ -206,10 +212,38 @@ function buildSystem(root: HTMLElement): void {
   g.appendChild(list)
 
   void liq.invoke('toolReport').then((rep: ToolReport) => {
-    intro.textContent = `${rep.distro} — ${rep.items.filter(i => i.present).length} of `
+    intro.textContent = `${rep.distro} (${rep.desktop}) — ${rep.items.filter(i => i.present).length} of `
       + `${rep.items.length} tools found. Anything missing switches a feature off, `
       + 'it does not break the app.'
     list.textContent = ''
+
+    // Icons first: a desktop with no usable theme is the most VISIBLE failure
+    // here — every row loses its picture — and the least self-explanatory, so
+    // it does not belong at the bottom of a list of programs.
+    const ic = rep.icons
+    const irow = el('div', 'opt-tool' + (ic.ok ? ' is-ok' : ' is-bad'))
+    const ihead = el('div', 'opt-tool-head')
+    ihead.appendChild(el('span', 'opt-tool-dot', ic.ok ? '✓' : '✕'))
+    ihead.appendChild(el('span', 'opt-tool-name', 'Icon theme'))
+    ihead.appendChild(el('span', 'opt-tool-found',
+      ic.ok ? ic.theme + (ic.configured && ic.configured !== ic.theme ? ` (${ic.configured} is not installed)` : '')
+        : 'none usable'))
+    irow.appendChild(ihead)
+    irow.appendChild(el('div', 'opt-hint', ic.ok
+      ? 'File and folder icons come from this theme.'
+      : `Your desktop asks for "${ic.configured || 'nothing'}", which is not installed, and no other `
+        + `theme here has file icons (${ic.installedCount} found). File rows will have no icons until one is installed.`))
+    if (ic.install) {
+      const cmd = el('div', 'opt-tool-cmd')
+      cmd.appendChild(el('code', '', ic.install))
+      const copy = el('button', 'btn', 'Copy')
+      copy.addEventListener('click', () => {
+        void navigator.clipboard.writeText(ic.install).then(() => { copy.textContent = 'Copied' })
+      })
+      cmd.appendChild(copy)
+      irow.appendChild(cmd)
+    }
+    list.appendChild(irow)
     for (const it of rep.items) {
       const row = el('div', 'opt-tool' + (it.present ? ' is-ok' : it.optional ? ' is-warn' : ' is-bad'))
       const head = el('div', 'opt-tool-head')
@@ -232,6 +266,318 @@ function buildSystem(root: HTMLElement): void {
       list.appendChild(row)
     }
   }).catch(() => { intro.textContent = 'The system check could not run.' })
+}
+
+// ------------------------------------------------------------- extensions
+
+const SOURCE_LABEL: Record<string, string> = {
+  liq: 'Yours', user: 'Your Nemo actions', system: 'From the system',
+}
+
+/**
+ * The Extensions manager.
+ *
+ * An extension here is a Nemo action, which is not a compromise but the point:
+ * the format is already supported, already safe (Exec is tokenised and spawned
+ * as argv, never through a shell), and already has things written for it — this
+ * machine has fifteen from Cinnamon plus one the user wrote. So "add an
+ * extension area" is mostly a matter of showing what is already loadable and
+ * giving somewhere of our own to put new ones.
+ *
+ * The list deliberately includes extensions that CANNOT run. An action whose
+ * dependency is missing is skipped silently by the menu, which turns "I
+ * installed it and nothing happened" into a dead end; here it is listed as
+ * blocked, with the missing binary named and the install command attached.
+ */
+function buildExtensions(root: HTMLElement, close: () => void): void {
+  // Installed | Get more. One tab with two faces rather than two tabs, because
+  // "what do I have" and "what could I have" are the same question asked twice
+  // and the answer to one is the context for the other.
+  const nav = el('div', 'opt-ext-nav')
+  const tabInstalled = el('button', 'opt-ext-nav-btn active', 'Installed')
+  const tabStore = el('button', 'opt-ext-nav-btn', 'Get more')
+  nav.append(tabInstalled, tabStore)
+  root.appendChild(nav)
+
+  const paneInstalled = el('div')
+  const paneStore = el('div')
+  paneStore.hidden = true
+  root.append(paneInstalled, paneStore)
+
+  // each pane can make the other's list wrong, so each is given the other's
+  // refresh rather than trying to guess when to reload
+  let reloadStore: () => void = () => {}
+  const reloadInstalled = buildInstalled(paneInstalled, close, () => reloadStore())
+
+  let storeBuilt = false
+  tabInstalled.addEventListener('click', () => {
+    tabInstalled.classList.add('active'); tabStore.classList.remove('active')
+    paneInstalled.hidden = false; paneStore.hidden = true
+  })
+  tabStore.addEventListener('click', () => {
+    tabStore.classList.add('active'); tabInstalled.classList.remove('active')
+    paneStore.hidden = false; paneInstalled.hidden = true
+    // the index is fetched the first time it is looked at, not at startup:
+    // opening Options should never wait on, or silently make, a network request
+    if (!storeBuilt) {
+      storeBuilt = true
+      reloadStore = buildStore(paneStore, () => void reloadInstalled())
+    }
+  })
+}
+
+function buildInstalled(root: HTMLElement, close: () => void, afterChange: () => void): () => Promise<void> {
+  const g = group(root, 'Extensions')
+  const intro = el('div', 'opt-hint', 'Loading…')
+  g.appendChild(intro)
+
+  const list = el('div', 'opt-exts')
+  g.appendChild(list)
+
+  const actions = el('div', 'opt-exts-actions')
+  const newBtn = el('button', 'btn btn-primary', 'New extension…')
+  newBtn.title = 'Write a starter extension into your extensions folder and open the folder'
+  const openBtn = el('button', 'btn', 'Open folder')
+  openBtn.title = 'Show the folder your extensions live in'
+  const fileBtn = el('button', 'btn', 'Install from file…')
+  fileBtn.title = 'Install a .nemo_action or an extension .zip you already have'
+  const reload = el('button', 'btn', 'Reload')
+  actions.append(newBtn, fileBtn, reload, openBtn)
+  g.appendChild(actions)
+
+  const goToFolder = async (select?: string): Promise<void> => {
+    const dir = await liq.invoke('extensionsDir') as string
+    // the folder opens in the file manager itself, which is the whole point of
+    // being one — so the dialog gets out of the way first
+    close()
+    await app.activeTab?.navigate(dir)
+    if (select) app.activeTab?.setSelection(new Set([select]))
+  }
+
+  newBtn.addEventListener('click', () => {
+    void liq.invoke('extensionCreate').then((file: string) => goToFolder(file))
+  })
+  openBtn.addEventListener('click', () => { void goToFolder() })
+  reload.addEventListener('click', () => { void refresh() })
+  fileBtn.addEventListener('click', () => {
+    void (async () => {
+      const picked = await liq.invoke('storePick').catch(() => []) as string[]
+      if (!picked.length) return
+      const r = await liq.invoke('storeInstallFile', picked[0]).catch(
+        (e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as InstallResult
+      intro.textContent = r.ok ? `Installed "${r.name}".` : (r.error ?? 'That did not work.')
+      await refresh()
+      afterChange()
+    })()
+  })
+
+  async function refresh(): Promise<void> {
+    const items = await liq.invoke('extensionList').catch(() => []) as ExtensionInfo[]
+    list.textContent = ''
+    const live = items.filter(i => i.enabled && !i.blocked).length
+    intro.textContent = items.length
+      ? `${live} of ${items.length} available in the right-click menu. `
+        + 'Extensions use the Nemo action format, so anything written for Nemo works here.'
+      : 'No extensions found. "New extension…" writes a starter one you can edit.'
+
+    for (const it of items) {
+      const row = el('div', 'opt-ext' + (it.blocked ? ' is-blocked' : it.enabled ? '' : ' is-off'))
+
+      const head = el('div', 'opt-ext-head')
+      const box = el('input', 'opt-ext-toggle')
+      box.type = 'checkbox'
+      box.checked = it.enabled
+      box.disabled = !!it.blocked
+      box.title = it.blocked ? 'This cannot run until what it needs is installed' : 'Show this in the right-click menu'
+      box.addEventListener('change', () => {
+        void liq.invoke('extensionEnable', it.id, box.checked).then(() => refresh())
+      })
+      head.appendChild(box)
+      head.appendChild(el('span', 'opt-ext-name', it.name))
+      head.appendChild(el('span', 'opt-ext-src', SOURCE_LABEL[it.source] ?? it.source))
+      row.appendChild(head)
+
+      if (it.comment) row.appendChild(el('div', 'opt-hint', it.comment))
+      row.appendChild(el('div', 'opt-ext-applies', it.applies))
+
+      if (it.blocked === 'deps') {
+        row.appendChild(el('div', 'opt-ext-bad',
+          `Needs ${it.missing.join(', ')}, which ${it.missing.length === 1 ? 'is' : 'are'} not installed.`))
+        if (it.install) {
+          const cmd = el('div', 'opt-tool-cmd')
+          cmd.appendChild(el('span', 'opt-ext-find', 'Find it with'))
+          cmd.appendChild(el('code', '', it.install))
+          const copy = el('button', 'btn', 'Copy')
+          copy.addEventListener('click', () => {
+            void navigator.clipboard.writeText(it.install).then(() => { copy.textContent = 'Copied' })
+          })
+          cmd.appendChild(copy)
+          row.appendChild(cmd)
+        }
+      } else if (it.blocked === 'condition') {
+        // Being honest about this beats running it: an unverifiable condition
+        // once put Cinnamon's disk-formatting action in the menu for a text file
+        row.appendChild(el('div', 'opt-ext-bad',
+          'Its rules depend on something this app cannot check, so it is not offered here.'))
+      }
+
+      const exec = el('div', 'opt-ext-exec')
+      exec.appendChild(el('code', '', it.exec))
+      exec.title = it.id
+      row.appendChild(exec)
+      list.appendChild(row)
+    }
+  }
+  void refresh()
+  return refresh
+}
+
+/**
+ * Browse and install from the registry.
+ *
+ * Returns a reload function so the installed pane can tell this one that
+ * something changed under it.
+ */
+function buildStore(root: HTMLElement, afterChange: () => void): () => void {
+  root.textContent = ''
+  const g = group(root, 'Get more extensions')
+  const intro = el('div', 'opt-hint', 'Loading…')
+  g.appendChild(intro)
+
+  const searchRow = el('div', 'opt-store-search')
+  const box = el('input', 'opt-search-input')
+  box.type = 'search'
+  box.placeholder = 'Search extensions…'
+  box.spellcheck = false
+  const refreshBtn = el('button', 'btn', 'Refresh')
+  refreshBtn.title = 'Fetch the list from the site again'
+  searchRow.append(box, refreshBtn)
+  g.appendChild(searchRow)
+
+  const list = el('div', 'opt-exts')
+  g.appendChild(list)
+
+  let all: StoreEntry[] = []
+
+  function paint(): void {
+    const terms = box.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const shown = all.filter(e => {
+      const hay = `${e.name} ${e.description} ${e.author} ${e.uuid}`.toLowerCase()
+      return terms.every(t => hay.includes(t))
+    })
+    list.textContent = ''
+    if (!shown.length) {
+      list.appendChild(el('div', 'opt-hint', all.length ? 'Nothing matches that.' : 'No extensions to show.'))
+      return
+    }
+    for (const e of shown) {
+      const row = el('div', 'opt-ext' + (e.installed ? ' is-installed' : ''))
+      const head = el('div', 'opt-ext-head')
+      if (e.icon) {
+        const img = el('img', 'opt-ext-icon')
+        img.src = e.icon
+        img.addEventListener('error', () => { img.style.visibility = 'hidden' })
+        head.appendChild(img)
+      }
+      head.appendChild(el('span', 'opt-ext-name', e.name))
+      if (e.score) head.appendChild(el('span', 'opt-ext-score', `▲ ${e.score}`))
+      head.appendChild(el('span', 'opt-ext-src', e.author ? `by ${e.author}` : 'community'))
+      row.appendChild(head)
+      if (e.description) row.appendChild(el('div', 'opt-hint', e.description))
+
+      const buttons = el('div', 'opt-ext-buttons')
+      if (e.installed) {
+        if (e.updatable) {
+          const up = el('button', 'btn btn-primary', 'Update')
+          up.addEventListener('click', () => void doInstall(e, up))
+          buttons.appendChild(up)
+        } else {
+          buttons.appendChild(el('span', 'opt-ext-have', '✓ Installed'))
+        }
+        const rm = el('button', 'btn', 'Remove')
+        rm.addEventListener('click', () => {
+          void liq.invoke('storeUninstall', e.uuid).then(() => { void load(false); afterChange() })
+        })
+        buttons.appendChild(rm)
+      } else {
+        const add = el('button', 'btn btn-primary', 'Install')
+        add.addEventListener('click', () => void doInstall(e, add))
+        buttons.appendChild(add)
+      }
+      row.appendChild(buttons)
+      list.appendChild(row)
+    }
+    // icons are fetched for what is on screen, not for the whole catalogue
+    const want = shown.filter(e => !e.icon).map(e => e.uuid)
+    if (want.length) {
+      void liq.invoke('storeIcons', want).then((got: Record<string, string>) => {
+        let any = false
+        for (const e of all) if (got[e.uuid]) { e.icon = got[e.uuid]; any = true }
+        if (any) paint()
+      }).catch(() => { /* icons are decoration */ })
+    }
+  }
+
+  /**
+   * Install, but show what it runs first.
+   *
+   * A Nemo action is a command line that runs with the user's privileges, and
+   * these packages ship their own shell scripts. Downloading one to describe it
+   * and then downloading it again to install costs a second request and is
+   * worth it: consent to "install Backup this file" is not consent to run an
+   * unseen script.
+   */
+  async function doInstall(e: StoreEntry, btn: HTMLButtonElement): Promise<void> {
+    const was = btn.textContent
+    btn.disabled = true
+    btn.textContent = 'Checking…'
+    const p = await liq.invoke('storePreview', e.uuid).catch(
+      (err: Error) => ({ ok: false, error: String(err?.message ?? err) })) as ExtensionPreview
+    btn.disabled = false
+    btn.textContent = was
+    if (!p.ok) { intro.textContent = p.error ?? 'That could not be read.'; return }
+
+    const lines = [
+      `It runs:  ${p.exec}`,
+      p.scripts.length ? `It installs ${p.scripts.length} script${p.scripts.length === 1 ? '' : 's'}: ${p.scripts.slice(0, 4).join(', ')}${p.scripts.length > 4 ? '…' : ''}` : '',
+      p.dependencies.length ? `It needs: ${p.dependencies.join(', ')}` : '',
+      p.conditions.length ? 'It runs a script to decide when to appear.' : '',
+    ].filter(Boolean)
+
+    app.emit('show-confirm', {
+      title: `Install "${p.name}"?`,
+      message: `${p.comment || 'An extension from the Cinnamon community site.'}\n\n${lines.join('\n')}\n\n`
+        + 'Extensions run commands with your account\'s permissions. Only install ones you trust.',
+      okLabel: 'Install',
+      onOk: () => {
+        void (async () => {
+          btn.disabled = true
+          btn.textContent = 'Installing…'
+          const r = await liq.invoke('storeInstall', e.uuid).catch(
+            (err: Error) => ({ ok: false, error: String(err?.message ?? err) })) as InstallResult
+          intro.textContent = r.ok ? `Installed "${r.name}".` : (r.error ?? 'That did not work.')
+          await load(false)
+          afterChange()
+        })()
+      },
+    })
+  }
+
+  async function load(force: boolean): Promise<void> {
+    intro.textContent = force ? 'Fetching…' : 'Loading…'
+    const idx = await liq.invoke('storeIndex', force).catch(
+      (e: Error) => ({ ok: false, entries: [], fetchedAt: 0, stale: false, error: String(e?.message ?? e) })) as StoreIndex
+    all = idx.entries
+    intro.textContent = idx.error
+      ? idx.error
+      : `${all.length} extensions from the Cinnamon community site. They use the Nemo action format, the same as yours.`
+    paint()
+  }
+
+  box.addEventListener('input', paint)
+  refreshBtn.addEventListener('click', () => { void load(true) })
+  void load(false)
+  return () => { void load(false) }
 }
 
 // ---------------------------------------------------------------- widgets

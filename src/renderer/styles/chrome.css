@@ -537,3 +537,34 @@
 .tb-tab.active .tb-tab-pin { opacity: 1; }
 .tb-tab-pin:hover { background: var(--bg-hover-strong); color: var(--text-primary); opacity: 1; }
 .tb-tab-pin:active { background: var(--bg-press); }
+
+/* ------------------------------------------------------- startup notice bar */
+
+/* Sits between the command bar and the panes. `flex: none` matters: #main is a
+   flex column and without it this bar would share the vertical space with the
+   file list instead of taking only what it needs. */
+.notice-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--stroke);
+  border-left: 3px solid var(--accent);
+}
+.notice-bar.is-bad { border-left-color: var(--danger); }
+.notice-icon { flex: none; color: var(--danger); font-size: 14px; }
+.notice-text { flex: 1; min-width: 0; line-height: 1.35; }
+.notice-bar .btn { flex: none; }
+.notice-x {
+  flex: none;
+  width: 24px; height: 24px;
+  border: 0; border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.notice-x:hover { background: var(--bg-hover); color: var(--text-primary); }

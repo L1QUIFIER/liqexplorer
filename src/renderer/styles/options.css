@@ -1,10 +1,74 @@
 /* Options dialog (Folder Options + search index). Builds on dialogs.css:
-   .dlg / .dlg-title / .dlg-tabs / .btn are shared; everything here is scoped
-   to .dlg-options so no other dialog can be affected. */
+   .dlg / .dlg-title / .btn are shared; everything here is scoped to
+   .dlg-options so no other dialog can be affected.
 
-.dlg-options .opt-body {
-  padding: 14px 16px 16px;
-  min-height: 260px;
+   THE GEOMETRY IS FIXED ON PURPOSE. .dlg sizes itself to its content, which
+   meant this dialog changed shape as you used it: typing in the search box
+   collapsed it from 660px to 404px (measured) and clearing the box snapped it
+   back. A settings window that moves under the pointer is the complaint that
+   prompted this rewrite, so height and width are pinned here and only the
+   content pane scrolls. */
+
+.dlg-options {
+  width: min(880px, calc(100vw - 64px));
+  height: min(660px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+}
+
+/* the two-pane body: nav on the left, one scrolling page on the right */
+.opt-shell {
+  flex: 1;
+  min-height: 0;              /* without this the panes grow instead of scroll */
+  display: flex;
+}
+
+.opt-side {
+  flex: 0 0 188px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 10px 12px 12px;
+  border-right: 1px solid var(--stroke);
+  background: var(--bg-subtle);
+}
+
+.opt-nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+
+.opt-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.opt-nav-btn:hover { background: var(--bg-hover); }
+.opt-nav-btn.active { background: var(--bg-selected); }
+/* the Win11 selection bar, which reads as "you are here" faster than colour */
+.opt-nav-btn.active::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 50%;
+  width: 3px; height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.opt-nav-btn:focus-visible { outline: 1px solid var(--accent-light); outline-offset: -1px; }
+
+.opt-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
 }
 
 .dlg-options .opt-panel[hidden] { display: none; }
@@ -21,12 +85,29 @@
 
 .opt-check {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
+  align-items: flex-start;     /* a two-line hint must not centre the box */
+  gap: 10px;
+  padding: 5px 0;
   font-size: var(--fs-body);
   color: var(--text-primary);
 }
+.opt-check input[type="checkbox"],
+.opt-check input[type="radio"] { margin-top: 1px; }
+
+/* label (and optional hint) on the left, control on the right */
+.opt-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+}
+.opt-row-text { flex: 1; min-width: 0; }
+.opt-row-label { line-height: 1.3; }
+.opt-setting .opt-select,
+.opt-setting .opt-num { flex: none; }
 .opt-check input[type="checkbox"],
 .opt-check input[type="radio"] {
   accent-color: var(--accent-light);
@@ -168,6 +249,7 @@
 
 /* explanatory line under a settings row — for a default that will otherwise
    look like something is missing */
+/* the 22px indent lines a hint up under a checkbox's LABEL, past the box */
 .opt-hint {
   margin: -2px 0 6px 22px;
   max-width: 44ch;
@@ -242,3 +324,42 @@
 /* already installed: quiet, so the ones you could add stand out */
 .opt-ext.is-installed { border-left-color: var(--stroke-strong); }
 .opt-ext-find { font-size: var(--fs-caption); color: var(--text-secondary); margin-right: 6px; }
+
+/* ---- search ---- */
+
+/* the box lives in the sidebar now, above the page list */
+.dlg-options .opt-search { display: flex; flex-direction: column; gap: 4px; }
+.dlg-options .opt-search-input { width: 100%; box-sizing: border-box; }
+.dlg-options .opt-search-count {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  padding-left: 2px;
+  min-height: 1.1em;
+}
+
+/* While searching, every page is shown at once, so each section says which page
+   it came from — a result you cannot locate again is only half an answer. */
+.opt-main.is-searching .opt-heading[data-page]::after {
+  content: " · " attr(data-page);
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+/* the pages are stacked while searching; keep them from running together */
+.opt-main.is-searching .opt-panel:not([hidden]) + .opt-panel:not([hidden]) { margin-top: 0; }
+
+/* ---- rows shared by the store and tool lists ---- */
+.opt-main .opt-group:last-child { margin-bottom: 0; }
+
+/* Inside a row's text block the hint is already past the control, so the
+   checkbox indent above would apply it twice. */
+.opt-row-text .opt-hint { margin: 2px 0 0; max-width: 52ch; }
+.opt-check .opt-row-text .opt-hint { margin-left: 0; }
+
+/* A narrow window shrinks the dialog, but the sidebar is a fixed 188px and
+   would end up taking a third of it. Give the content the space back. */
+@media (max-width: 720px) {
+  .opt-side { flex-basis: 148px; padding: 10px 8px; }
+  .opt-main { padding: 12px 14px 16px; }
+  .opt-setting { flex-wrap: wrap; }      /* label and control stack rather than crush */
+}

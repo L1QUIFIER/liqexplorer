@@ -9,6 +9,8 @@ bash "$PROJ/bin/stage.sh"
 # for running from source; packaged AppImages ship their own sandbox setup.
 ARGS=(--no-sandbox)
 if [ "${LIQEXPLORER_TEST:-}" = "1" ]; then
-  ARGS+=(--user-data-dir="$HOME/.cache/liqexplorer-test/profile")
+  # LIQEXPLORER_TEST_DIR lets two test runs coexist: the single-instance lock is
+  # per user-data-dir, so sharing one path means the second launch exits quietly
+  ARGS+=(--user-data-dir="${LIQEXPLORER_TEST_DIR:-$HOME/.cache/liqexplorer-test}/profile")
 fi
 exec "$STAGE/electron/electron" "${ARGS[@]}" "$PROJ" "$@"

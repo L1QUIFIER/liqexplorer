@@ -44,12 +44,45 @@ export interface ConvertOptions {
   strip?: boolean
 }
 
+/**
+ * What a bin's tile shows.
+ *
+ * Tiles used to draw one inline SVG chosen by `action`, so every bin of the
+ * same kind looked identical — and the whole point of bins is having several of
+ * the same kind ("Copy to… Photos", "Copy to… Invoices"). Two identical icons
+ * with different subtitles is a reading exercise during a drag, which is the
+ * one moment there is no time to read.
+ *
+ *   builtin  the action's own SVG, as before — the default
+ *   emoji    one or two characters, typed or picked
+ *   image    a PNG/JPG/SVG the user chose, COPIED into the profile so the tile
+ *            does not go blank when the original is moved
+ *   themed   a freedesktop icon name from the current theme (liqicon://)
+ */
+export type BinIconKind = 'builtin' | 'emoji' | 'image' | 'themed'
+
+export interface BinIcon {
+  kind: BinIconKind
+  /** emoji characters, the stored file name, or the themed icon name */
+  value: string
+}
+
+/** Tile accents. Named rather than free-form hex so they follow the theme and
+ *  cannot produce an unreadable tile. */
+export type BinColor = 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'blue' | 'purple' | 'pink'
+
+export const BIN_COLORS: readonly BinColor[] =
+  ['default', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const
+
 export interface BinConfig {
   /** stable id; also the reorder key */
   id: string
   action: BinAction
   label: string
-  /** liqicon name(s) are not used — tiles draw inline SVG picked by `action` */
+  /** what the tile draws; absent means the action's built-in SVG */
+  icon?: BinIcon
+  /** tile accent; absent or 'default' means the theme's own bin colour */
+  color?: BinColor
   /** absolute path, TARGET_ASK or TARGET_CWD (actions with no destination ignore it) */
   target?: string
   /** hidden bins stay configured but are not drawn in the tray */

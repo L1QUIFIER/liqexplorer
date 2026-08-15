@@ -31,7 +31,7 @@ export function mountOptions(): void {
   app.on('show-options', (tab?: OptionsTab) => { void show(tab) })
 }
 
-type OptionsTab = 'general' | 'view' | 'search' | 'system' | 'extensions'
+type OptionsTab = 'general' | 'appearance' | 'view' | 'media' | 'search' | 'system' | 'extensions'
 
 async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   if (openCount) return                   // one Options window, like Explorer
@@ -41,13 +41,20 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   // no onEnter: Enter belongs to the path/exclusion inputs (the modal's Enter
   // handler fires first, on document capture, and would close the dialog)
   const modal = openModal({
-    width: 520,
+    // no width here: this dialog's size is fixed in options.css, and an inline
+    // style from openModal would win over the stylesheet and pin it back to the
+    // narrow column this rewrite exists to get rid of
     className: 'dlg-options',
     onDismiss: () => close(),
   })
+  // set once the search box exists; removed here so a closed dialog leaves no
+  // key handler behind
+  let escapeCleanup: (() => void) | null = null
   const close = (): void => {
     offStatus?.()
     offStatus = null
+    escapeCleanup?.()
+    escapeCleanup = null
     openCount = 0
     modal.close()
   }
@@ -67,32 +74,96 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   const searchCount = el('span', 'opt-search-count')
   searchRow.append(searchBox, searchCount)
 
-  const tabs = el('div', 'dlg-tabs')
-  const body = el('div', 'dlg-body opt-body')
+  // A SIDEBAR, not a tab strip.
+  //
+  // The strip was five items wide in a 520px dialog, which forced the content
+  // into a column so narrow that "Show [2] lines of the filename under an icon"
+  // wrapped onto four lines and every page scrolled — the View page was 1936px
+  // of content in a 472px window. A vertical list costs width that the content
+  // gets back twice over, and it has room to grow past five entries.
+  const shell = el('div', 'opt-shell')
+  const side = el('div', 'opt-side')
+  const nav = el('div', 'opt-nav')
+  const main = el('div', 'opt-main')
+  side.append(searchRow, nav)
+  shell.append(side, main)
+
   const general = el('div', 'opt-panel')
   const view = el('div', 'opt-panel')
+  const appearance = el('div', 'opt-panel')
+  const media = el('div', 'opt-panel')
   const search = el('div', 'opt-panel')
   const system = el('div', 'opt-panel')
   const extensions = el('div', 'opt-panel')
-  body.append(general, view, search, system, extensions)
+  main.append(general, appearance, view, media, search, system, extensions)
 
   const panels: [string, HTMLElement][] = [
-    ['General', general], ['View', view], ['Search', search],
-    ['System', system], ['Extensions', extensions]]
-  const tabBtns = panels.map(([label]) => el('button', 'dlg-tab', label))
+    ['General', general], ['Appearance', appearance], ['Files and folders', view],
+    ['Media', media], ['Search', search], ['System', system], ['Extensions', extensions]]
+  const tabBtns = panels.map(([label]) => {
+    const b = el('button', 'opt-nav-btn')
+    b.type = 'button'
+    b.setAttribute('role', 'tab')
+    b.appendChild(el('span', 'opt-nav-label', label))
+    return b
+  })
   const select = (i: number): void => {
-    tabBtns.forEach((b, k) => b.classList.toggle('active', k === i))
+    tabBtns.forEach((b, k) => {
+      b.classList.toggle('active', k === i)
+      b.setAttribute('aria-selected', String(k === i))
+    })
     panels.forEach(([, p], k) => { p.hidden = k !== i })
+    // a page change starts at its top, not wherever the last page was scrolled
+    main.scrollTop = 0
   }
-  tabBtns.forEach((b, i) => { b.addEventListener('click', () => select(i)); tabs.appendChild(b) })
+  tabBtns.forEach((b, i) => { b.addEventListener('click', () => select(i)); nav.appendChild(b) })
+
+  // ↑/↓ move between pages once the list has focus, as a real listbox does
+  nav.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    const cur = tabBtns.findIndex(b => b.classList.contains('active'))
+    const next = (cur + (e.key === 'ArrowDown' ? 1 : tabBtns.length - 1)) % tabBtns.length
+    e.preventDefault()
+    select(next)
+    tabBtns[next].focus()
+  })
 
   buildGeneral(general)
-  buildView(view)
+
+  /**
+   * The old View tab held TEN sections — 2549px of content behind one nav
+   * entry, which is most of why this dialog felt like a wall. buildView still
+   * writes them all into one container; they are dealt out to pages here by
+   * heading, so its three hundred lines did not have to be re-authored (and no
+   * setting could be lost in the re-authoring).
+   *
+   * Anything not named below stays on Files and folders rather than
+   * disappearing: a section added later must show up somewhere, even if nobody
+   * remembers to update this map.
+   */
+  const PAGE_OF: Record<string, HTMLElement> = {
+    'Appearance': appearance,
+    'Layout': appearance,
+    'Names and sizes': appearance,
+    'Home page': appearance,
+    'Media viewer': media,
+    'Live previews': media,
+    'Peek inside items': media,
+    'Performance': media,
+  }
+  const viewStaging = el('div')
+  buildView(viewStaging)
+  for (const g of [...viewStaging.querySelectorAll<HTMLElement>('.opt-group')]) {
+    const heading = g.querySelector('.opt-heading')?.textContent?.trim() ?? ''
+    ;(PAGE_OF[heading] ?? view).appendChild(g)
+  }
   offStatus = buildSearch(search, () => modal.closed)
   buildSystem(system)
   buildExtensions(extensions, close)
-  select(initialTab === 'view' ? 1 : initialTab === 'search' ? 2
-    : initialTab === 'system' ? 3 : initialTab === 'extensions' ? 4 : 0)
+  const PAGE_INDEX: Record<OptionsTab, number> = {
+    general: 0, appearance: 1, view: 2, media: 3, search: 4, system: 5, extensions: 6,
+  }
+  select(PAGE_INDEX[initialTab] ?? 0)
 
   // ---- search over everything the panels just built ----
   //
@@ -105,7 +176,11 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   const indexed: Indexed[] = []
   panels.forEach(([tabName, panel]) => {
     panel.querySelectorAll<HTMLElement>('.opt-group').forEach(group => {
-      const heading = group.querySelector('.opt-heading')?.textContent ?? ''
+      const headEl = group.querySelector('.opt-heading')
+      const heading = headEl?.textContent ?? ''
+      // which page this section lives on, revealed only while searching — a
+      // result with no context is a setting you cannot find again tomorrow
+      if (headEl) (headEl as HTMLElement).dataset.page = tabName
       // Index the LEAF control, not the wrapper. Several settings share an
       // .opt-inline row, so indexing the wrapper made a search for "subtitle"
       // reveal the unrelated checkbox sitting beside it. Wrappers are hidden
@@ -130,6 +205,10 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
     })
   })
 
+  /** every element the search can hide by itself; anything else is prose that
+   *  follows its section */
+  const indexedRows = new Set(indexed.map(i => i.row))
+
   let searching = false
   function applySearch(): void {
     const q = searchBox.value.trim().toLowerCase()
@@ -142,9 +221,15 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
           it.group.hidden = false
           if (it.wrapper) it.wrapper.hidden = false
         }
-        body.classList.remove('is-searching')
-        tabs.hidden = false
-        // back to whichever tab was active before the search started
+        // and the prose the search hid alongside its section, which is not in
+        // `indexed` and so would otherwise stay hidden for the rest of the
+        // session once you had searched once
+        for (const [, panel] of panels) {
+          panel.querySelectorAll<HTMLElement>('.opt-group > *').forEach(c => { c.hidden = false })
+          for (const c of [...panel.children] as HTMLElement[]) c.hidden = false
+        }
+        main.classList.remove('is-searching')
+        // back to whichever page was active before the search started
         const active = tabBtns.findIndex(b => b.classList.contains('active'))
         select(active >= 0 ? active : 0)
       }
@@ -152,11 +237,13 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
       return
     }
     searching = true
-    body.classList.add('is-searching')
-    // every panel is shown at once while searching — the whole point is to stop
-    // caring which tab a setting lives on
-    tabs.hidden = true
+    main.classList.add('is-searching')
+    // Every page is shown at once while searching — the whole point is to stop
+    // caring which one a setting lives on. The nav stays visible and keeps its
+    // highlight, because hiding it (what this did) removed the only thing
+    // telling you how to get back, and made the dialog change size.
     panels.forEach(([, p]) => { p.hidden = false })
+    main.scrollTop = 0
     let hits = 0
     for (const it of indexed) {
       const match = terms.every(t => it.hay.includes(t))
@@ -169,27 +256,61 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
     for (const w of wrappers) {
       w.hidden = ![...w.children].some(c => !(c as HTMLElement).hidden)
     }
-    // a section with nothing left in it is noise
+    // A section's prose (notes, status lines, lists) is not a setting and is
+    // never indexed, so nothing was hiding it — which made a section with no
+    // matching setting still appear, carrying only its explanation. Prose
+    // follows its section: shown when something in it matched, hidden with it
+    // otherwise. Without this the count and the visible sections disagreed.
+    const isHit = new Set(indexed.filter(it => !it.row.hidden).map(it => it.row))
     for (const [, panel] of panels) {
+      // Page chrome — the Extensions sub-nav, the index's Rebuild/Cancel row —
+      // hangs off the PANEL rather than off a section, so the section rules
+      // below never reach it and it sat under the results looking like part of
+      // them. While searching there are no pages, so there is no page chrome.
+      for (const c of [...panel.children] as HTMLElement[]) {
+        if (!c.classList.contains('opt-group')) c.hidden = true
+      }
       panel.querySelectorAll<HTMLElement>('.opt-group').forEach(g => {
-        const anyVisible = [...g.children].some(c =>
-          !(c as HTMLElement).hidden && !c.classList.contains('opt-heading'))
-        g.hidden = !anyVisible
+        const kids = [...g.children] as HTMLElement[]
+        const matched = kids.some(c => isHit.has(c))
+        for (const c of kids) {
+          if (c.classList.contains('opt-heading')) continue
+          if (!indexedRows.has(c)) c.hidden = !matched
+        }
+        g.hidden = !matched
       })
     }
     searchCount.textContent = hits ? `${hits} setting${hits === 1 ? '' : 's'}` : 'nothing matches'
   }
   searchBox.addEventListener('input', applySearch)
-  searchBox.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && searchBox.value) { e.stopPropagation(); searchBox.value = ''; applySearch() }
-  })
+
+  /**
+   * Escape clears the search before it closes the dialog.
+   *
+   * This was written as a keydown listener on the search box itself, and could
+   * never have worked: dialogs.ts binds Escape on `document` in the CAPTURE
+   * phase, which runs before anything on the box, so the first Escape always
+   * closed the whole dialog and threw the search away. The capture phase starts
+   * at the WINDOW, one step above document, which is the only place a listener
+   * can get in front of the modal's without reordering its registration.
+   */
+  const onEscape = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !searchBox.value) return
+    e.preventDefault()
+    e.stopPropagation()
+    searchBox.value = ''
+    applySearch()
+    searchBox.focus()
+  }
+  window.addEventListener('keydown', onEscape, true)
+  escapeCleanup = () => window.removeEventListener('keydown', onEscape, true)
 
   const buttons = el('div', 'dlg-buttons')
   const closeBtn = el('button', 'btn btn-primary', 'Close')
   closeBtn.addEventListener('click', close)
   buttons.appendChild(closeBtn)
 
-  modal.dlg.append(titleRow, searchRow, tabs, body, buttons)
+  modal.dlg.append(titleRow, shell, buttons)
   setTimeout(() => searchBox.focus(), 30)
 }
 
@@ -598,20 +719,35 @@ function check(
   box.type = 'checkbox'
   box.checked = checked
   box.addEventListener('change', () => onChange(box.checked))
-  wrap.append(box, el('span', '', label))
-  if (hint) wrap.title = hint
+  const text = el('div', 'opt-row-text')
+  text.appendChild(el('div', 'opt-row-label', label))
+  // the hint was a title= tooltip, which is invisible until you hover the exact
+  // word and never appears at all for anyone using a keyboard
+  if (hint) text.appendChild(el('div', 'opt-hint', hint))
+  wrap.append(box, text)
   parent.appendChild(wrap)
   return box
 }
 
-/** a labelled number spinner: "Show N lines of the filename" */
+/**
+ * A labelled number spinner.
+ *
+ * Laid out as a ROW — text on the left, control on the right, hint underneath —
+ * rather than as an inline run of spans. The old version put the label, the
+ * input and the trailing words in one wrapping line, so "Show [2] lines of the
+ * filename under an icon" broke across four lines in a narrow dialog and the
+ * control ended up in the middle of a sentence.
+ */
 function numberRow(
   parent: HTMLElement, before: string, value: number,
   opts: { min: number; max: number; step?: number; after?: string; hint?: string },
   onChange: (v: number) => void,
 ): HTMLInputElement {
-  const row = el('label', 'opt-check')
-  row.appendChild(el('span', '', before))
+  const row = el('label', 'opt-setting')
+  const text = el('div', 'opt-row-text')
+  text.appendChild(el('div', 'opt-row-label', opts.after ? `${before} ${opts.after}` : before))
+  if (opts.hint) text.appendChild(el('div', 'opt-hint', opts.hint))
+  row.appendChild(text)
   const input = el('input', 'opt-num')
   input.type = 'number'
   input.min = String(opts.min)
@@ -624,8 +760,6 @@ function numberRow(
     onChange(n)
   })
   row.appendChild(input)
-  if (opts.after) row.appendChild(el('span', '', opts.after))
-  if (opts.hint) row.appendChild(el('div', 'opt-hint', opts.hint))
   parent.appendChild(row)
   return input
 }
@@ -635,8 +769,11 @@ function choiceRow<T extends string | number>(
   parent: HTMLElement, label: string, value: T,
   choices: [T, string][], onChange: (v: T) => void, hint?: string,
 ): HTMLSelectElement {
-  const row = el('label', 'opt-check')
-  row.appendChild(el('span', '', label))
+  const row = el('label', 'opt-setting')
+  const text = el('div', 'opt-row-text')
+  text.appendChild(el('div', 'opt-row-label', label))
+  if (hint) text.appendChild(el('div', 'opt-hint', hint))
+  row.appendChild(text)
   const sel = el('select', 'opt-select')
   for (const [v, text] of choices) {
     const o = document.createElement('option')
@@ -651,7 +788,6 @@ function choiceRow<T extends string | number>(
     if (match) onChange(match[0])
   })
   row.appendChild(sel)
-  if (hint) row.appendChild(el('div', 'opt-hint', hint))
   parent.appendChild(row)
   return sel
 }
@@ -887,22 +1023,11 @@ function buildView(root: HTMLElement): void {
     + 'read, so large ones on a network drive are left as thumbnails.')
   check(liveOpts, 'Stop when the system asks to reduce motion', s.liveMediaReduceMotion,
     v => { void app.setSettings({ liveMediaReduceMotion: v }); paintLive() })
-  const capRow = el('label', 'opt-check')
-  capRow.appendChild(el('span', '', 'Play at most'))
-  const capInput = el('input', 'opt-num')
-  capInput.type = 'number'
-  capInput.min = '1'
-  capInput.max = '24'
-  capInput.step = '1'
-  capInput.value = String(s.liveMediaMax ?? 10)
-  capInput.addEventListener('change', () => {
-    const n = Math.max(1, Math.min(24, Math.round(Number(capInput.value) || 10)))
-    capInput.value = String(n)
-    void app.setSettings({ liveMediaMax: n })
-  })
-  capRow.appendChild(capInput)
-  capRow.appendChild(el('span', '', 'videos at once'))
-  liveOpts.appendChild(capRow)
+  // was hand-built as an inline label+input+text run, which left it as the one
+  // row on the page still using the old shape
+  numberRow(liveOpts, 'Play at most', s.liveMediaMax ?? 10,
+    { min: 1, max: 24, after: 'videos at once' },
+    n => { void app.setSettings({ liveMediaMax: n }) })
   const liveNote = el('div', 'opt-note', '')
   live.appendChild(liveNote)
   function paintLive(): void {

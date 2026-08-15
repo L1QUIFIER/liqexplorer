@@ -12,5 +12,6 @@ docs/research/
 
 # esbuild scratch from ad-hoc test bundles
 /undefined/
+
 .testdata/
 release/

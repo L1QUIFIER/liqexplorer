@@ -36,9 +36,12 @@ case "${1:-}" in
   # stop our holder so the name is free again; nemo-desktop takes it on its
   # next start, and desktop icons were never touched
   pkill -f 'helpers/filemanager1.py' 2>/dev/null || true
-  pkill -x nemo-desktop 2>/dev/null || true
-  sleep 1
-  gsettings set org.nemo.desktop show-desktop-icons true 2>/dev/null || true
+  # Cinnamon only: elsewhere there is no nemo-desktop and no schema to restore
+  if gsettings list-schemas 2>/dev/null | grep -qx 'org.nemo.desktop'; then
+    pkill -x nemo-desktop 2>/dev/null || true
+    sleep 1
+    gsettings set org.nemo.desktop show-desktop-icons true 2>/dev/null || true
+  fi
   echo "Removed the LiqExplorer FileManager1 service."
   exit 0
   ;;

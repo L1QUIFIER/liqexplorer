@@ -33,7 +33,8 @@ import type {
 } from '../../shared/types'
 import { DEFAULT_VIEW_STATE, DEFAULT_SETTINGS, DEFAULT_SMART_RULES, FINDER_URI } from '../../shared/types'
 import { PUSH } from '../../shared/ipc'
-import { sortEntries, computeGroups, type Group } from '../../shared/sort'
+import { sortEntries, computeGroups, type Group, setSizeUnits } from '../../shared/sort'
+import { setPreloadDepth } from '../media/preload'
 import { archiveUri, isArchiveUri, parseArchiveUri } from '../../shared/archive'
 import { classifyFolder } from '../../shared/foldertype'
 import { pinnedOnly, sanitizeSession, type SessionState } from '../../shared/session'
@@ -469,6 +470,22 @@ export class Tab {
 }
 
 /** This PC: the six Win11 user folders, then local drives, then network mounts. */
+/**
+ * Settings that are read by code with no access to the app object — the size
+ * formatter called for every row, the preload depth inside the media module,
+ * and the label clamp which is pure CSS. Pushed to them here rather than having
+ * each reach back for the settings, and applied on startup AND on every change
+ * so the two paths cannot drift.
+ */
+export function applyDisplaySettings(s: AppSettings): void {
+  setSizeUnits(s.sizeUnits === 'binary' ? 'binary' : 'decimal')
+  setPreloadDepth(s.preloadNeighbours ?? 2)
+  // the grid label clamp is a CSS custom property, so changing it restyles
+  // every tile without re-rendering a single one
+  document.documentElement.style.setProperty(
+    '--grid-label-lines', String(Math.max(1, Math.min(8, s.gridLabelLines || 2))))
+}
+
 const COMPUTER_DIR_KEYS = ['DESKTOP', 'DOCUMENTS', 'DOWNLOAD', 'MUSIC', 'PICTURES', 'VIDEOS']
 
 async function computerEntries(): Promise<FileEntry[]> {
@@ -692,6 +709,7 @@ export class App {
 
   async init(): Promise<void> {
     this.settings = await liq.getSettings()
+    applyDisplaySettings(this.settings)
     this.theme = await liq.getTheme()
     document.documentElement.dataset.theme = this.theme
     this.homePath = await liq.homeDir()
@@ -863,11 +881,12 @@ export class App {
 
   async setSettings(patch: Partial<AppSettings>): Promise<void> {
     this.settings = await liq.setSettings(patch)
+    applyDisplaySettings(this.settings)
     this.emit('settings-changed', this.settings)
     // both panes of the active tab are on screen: neither may be left stale
     const shown = [this.activePrimary, this.activePrimary?.secondary].filter(Boolean) as Tab[]
     if ('showHidden' in patch) for (const t of shown) t.refresh()
-    if ('foldersFirst' in patch || 'compactView' in patch) {
+    if ('foldersFirst' in patch || 'compactView' in patch || 'sizeUnits' in patch) {
       for (const t of shown) { t.recompute(); this.emit('tab-listing', t) }
     }
   }

@@ -695,3 +695,56 @@
   color: var(--text-secondary);
   font-size: var(--fs-caption);
 }
+
+/* ---------------------------------------------------- Options search
+   Above the tabs because it searches ACROSS them — a setting you cannot find
+   is usually one you are looking for on the wrong tab. */
+.dlg-options .opt-search { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.dlg-options .opt-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font: inherit;
+}
+.dlg-options .opt-search-input:focus { outline: none; border-color: var(--accent); }
+.dlg-options .opt-search-count { color: var(--text-secondary); font-size: var(--fs-caption); white-space: nowrap; }
+/* while searching, every panel is shown at once and stacked */
+.dlg-options .opt-body.is-searching .opt-panel { display: block; }
+.dlg-options .opt-body.is-searching .opt-group[hidden] { display: none; }
+.dlg-options .opt-select {
+  margin-left: auto;
+  padding: 3px 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-caption);
+}
+
+/* ------------------------------------------------- Options: System check */
+.dlg-options .opt-tools { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.dlg-options .opt-tool { padding: 8px 10px; border-radius: 6px; background: var(--bg-subtle);
+  border-left: 3px solid var(--stroke); }
+.dlg-options .opt-tool.is-ok { border-left-color: #3fa34d; }
+/* optional-and-missing is a nudge, not a fault — the app still works */
+.dlg-options .opt-tool.is-warn { border-left-color: #d8a022; }
+.dlg-options .opt-tool.is-bad { border-left-color: var(--danger); }
+.dlg-options .opt-tool-head { display: flex; align-items: baseline; gap: 8px; }
+.dlg-options .opt-tool-dot { font-weight: 700; }
+.dlg-options .opt-tool.is-ok .opt-tool-dot { color: #3fa34d; }
+.dlg-options .opt-tool.is-warn .opt-tool-dot { color: #d8a022; }
+.dlg-options .opt-tool.is-bad .opt-tool-dot { color: var(--danger); }
+.dlg-options .opt-tool-name { font-weight: 600; }
+.dlg-options .opt-tool-found { color: var(--text-secondary); font-size: var(--fs-caption); margin-left: auto; }
+.dlg-options .opt-tool-cmd { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.dlg-options .opt-tool-cmd code {
+  flex: 1; min-width: 0; padding: 4px 8px; border-radius: 4px;
+  background: var(--bg-float-solid); border: 1px solid var(--stroke);
+  font-family: monospace; font-size: var(--fs-caption);
+  overflow-x: auto; white-space: nowrap;
+}

@@ -9,6 +9,7 @@ import type { WebContents } from 'electron'
 import { PUSH } from '../../shared/ipc'
 import type { DirChunk, FileEntry, ListOptions } from '../../shared/types'
 import { mimeForName, mimeLabel, iconsForMime, folderIcons, xdgUserDirs } from './mime'
+import { sniffFile, worthSniffing } from './sniff'
 import { allRated, ratingOf } from '../state/ratings'
 
 const CHUNK = 2000
@@ -118,7 +119,16 @@ export async function entryFor(p: string, name: string, st?: fs.Stats | null, ct
   }
   const isDir = st2.isDirectory()
   const ext = isDir ? '' : path.extname(name).slice(1).toLowerCase()
-  const mime = mimeForName(name, isDir)
+  let mime = mimeForName(name, isDir)
+  // A handful of extensions are not evidence — '.ts' is a transport stream OR
+  // TypeScript, and shared-mime-info picks Qt Linguist by name alone, so an
+  // ordinary video was listed as a Qt file and could not be played. For only
+  // those, read the head of the file and let the bytes decide. Everything else
+  // keeps the name answer and costs no I/O. See fs/sniff.ts.
+  if (!isDir && st2.size > 0 && worthSniffing(name)) {
+    const sniffed = await sniffFile(full)
+    if (sniffed.mime) mime = sniffed.mime
+  }
   const e: FileEntry = {
     name, path: full, isDir, isSymlink: isLink, target,
     size: isDir ? -1 : st2.size, mtime: st2.mtimeMs, ctime: st2.ctimeMs,

@@ -8,6 +8,7 @@ import type { AppSettings, FolderKind, IndexStatus, MediaViewerKind, ViewMode } 
 import { DEFAULT_SMART_RULES } from '../../shared/types'
 import { PUSH } from '../../shared/ipc'
 import { PEEK } from '../../shared/peek'
+import type { ToolReport } from '../../shared/tools'
 import { app, liq } from '../core/app'
 import { formatSize, formatDate } from '../../shared/sort'
 import { openModal, el, closeX } from './dialogs'
@@ -28,7 +29,7 @@ export function mountOptions(): void {
   app.on('show-options', (tab?: OptionsTab) => { void show(tab) })
 }
 
-type OptionsTab = 'general' | 'view' | 'search'
+type OptionsTab = 'general' | 'view' | 'search' | 'system'
 
 async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   if (openCount) return                   // one Options window, like Explorer
@@ -53,14 +54,27 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   titleRow.appendChild(el('span', 'dlg-title-text', 'Options'))
   titleRow.appendChild(closeX(close))
 
+  // Search sits ABOVE the tabs because it searches across them: a setting you
+  // cannot find is usually one you are looking for on the wrong tab, so making
+  // the user pick a tab first would preserve the exact problem it solves.
+  const searchRow = el('div', 'opt-search')
+  const searchBox = el('input', 'opt-search-input')
+  searchBox.type = 'search'
+  searchBox.placeholder = 'Search settings…'
+  searchBox.spellcheck = false
+  const searchCount = el('span', 'opt-search-count')
+  searchRow.append(searchBox, searchCount)
+
   const tabs = el('div', 'dlg-tabs')
   const body = el('div', 'dlg-body opt-body')
   const general = el('div', 'opt-panel')
   const view = el('div', 'opt-panel')
   const search = el('div', 'opt-panel')
-  body.append(general, view, search)
+  const system = el('div', 'opt-panel')
+  body.append(general, view, search, system)
 
-  const panels: [string, HTMLElement][] = [['General', general], ['View', view], ['Search', search]]
+  const panels: [string, HTMLElement][] = [
+    ['General', general], ['View', view], ['Search', search], ['System', system]]
   const tabBtns = panels.map(([label]) => el('button', 'dlg-tab', label))
   const select = (i: number): void => {
     tabBtns.forEach((b, k) => b.classList.toggle('active', k === i))
@@ -71,14 +85,153 @@ async function show(initialTab: OptionsTab = 'general'): Promise<void> {
   buildGeneral(general)
   buildView(view)
   offStatus = buildSearch(search, () => modal.closed)
-  select(initialTab === 'view' ? 1 : initialTab === 'search' ? 2 : 0)
+  buildSystem(system)
+  select(initialTab === 'view' ? 1 : initialTab === 'search' ? 2 : initialTab === 'system' ? 3 : 0)
+
+  // ---- search over everything the panels just built ----
+  //
+  // Indexed AFTER the fact rather than by registering each control as it is
+  // created: the panels are built by forty-odd imperative calls, and threading
+  // a registration argument through all of them to answer a display question
+  // would be a lot of churn for no behaviour. The DOM already holds the label,
+  // the hint and the section heading — which is exactly what a user types.
+  interface Indexed { row: HTMLElement; group: HTMLElement; panel: HTMLElement; hay: string; wrapper?: HTMLElement }
+  const indexed: Indexed[] = []
+  panels.forEach(([tabName, panel]) => {
+    panel.querySelectorAll<HTMLElement>('.opt-group').forEach(group => {
+      const heading = group.querySelector('.opt-heading')?.textContent ?? ''
+      // Index the LEAF control, not the wrapper. Several settings share an
+      // .opt-inline row, so indexing the wrapper made a search for "subtitle"
+      // reveal the unrelated checkbox sitting beside it. Wrappers are hidden
+      // separately, once everything inside them is hidden.
+      group.querySelectorAll<HTMLElement>(':scope > *').forEach(row => {
+        if (row.classList.contains('opt-heading')) return
+        const leaves = row.classList.contains('opt-inline')
+          ? [...row.querySelectorAll<HTMLElement>(':scope > .opt-check, :scope > .opt-radio')]
+          : []
+        if (leaves.length) {
+          for (const leaf of leaves) {
+            indexed.push({
+              row: leaf, group, panel,
+              hay: `${tabName} ${heading} ${leaf.textContent ?? ''}`.toLowerCase(),
+              wrapper: row,
+            })
+          }
+          return
+        }
+        indexed.push({ row, group, panel, hay: `${tabName} ${heading} ${row.textContent ?? ''}`.toLowerCase() })
+      })
+    })
+  })
+
+  let searching = false
+  function applySearch(): void {
+    const q = searchBox.value.trim().toLowerCase()
+    const terms = q.split(/\s+/).filter(Boolean)
+    if (!terms.length) {
+      if (searching) {
+        searching = false
+        for (const it of indexed) {
+          it.row.hidden = false
+          it.group.hidden = false
+          if (it.wrapper) it.wrapper.hidden = false
+        }
+        body.classList.remove('is-searching')
+        tabs.hidden = false
+        // back to whichever tab was active before the search started
+        const active = tabBtns.findIndex(b => b.classList.contains('active'))
+        select(active >= 0 ? active : 0)
+      }
+      searchCount.textContent = ''
+      return
+    }
+    searching = true
+    body.classList.add('is-searching')
+    // every panel is shown at once while searching — the whole point is to stop
+    // caring which tab a setting lives on
+    tabs.hidden = true
+    panels.forEach(([, p]) => { p.hidden = false })
+    let hits = 0
+    for (const it of indexed) {
+      const match = terms.every(t => it.hay.includes(t))
+      it.row.hidden = !match
+      if (match) hits++
+    }
+    // an .opt-inline wrapper whose controls all matched nothing would otherwise
+    // sit there as an empty gap
+    const wrappers = new Set(indexed.map(i => i.wrapper).filter(Boolean) as HTMLElement[])
+    for (const w of wrappers) {
+      w.hidden = ![...w.children].some(c => !(c as HTMLElement).hidden)
+    }
+    // a section with nothing left in it is noise
+    for (const [, panel] of panels) {
+      panel.querySelectorAll<HTMLElement>('.opt-group').forEach(g => {
+        const anyVisible = [...g.children].some(c =>
+          !(c as HTMLElement).hidden && !c.classList.contains('opt-heading'))
+        g.hidden = !anyVisible
+      })
+    }
+    searchCount.textContent = hits ? `${hits} setting${hits === 1 ? '' : 's'}` : 'nothing matches'
+  }
+  searchBox.addEventListener('input', applySearch)
+  searchBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && searchBox.value) { e.stopPropagation(); searchBox.value = ''; applySearch() }
+  })
 
   const buttons = el('div', 'dlg-buttons')
   const closeBtn = el('button', 'btn btn-primary', 'Close')
   closeBtn.addEventListener('click', close)
   buttons.appendChild(closeBtn)
 
-  modal.dlg.append(titleRow, tabs, body, buttons)
+  modal.dlg.append(titleRow, searchRow, tabs, body, buttons)
+  setTimeout(() => searchBox.focus(), 30)
+}
+
+/**
+ * System check: which external tools this machine has.
+ *
+ * The app carries no runtime dependencies and shells out for everything, so a
+ * missing package does not break it — it removes a feature. Without this panel
+ * that shows up as "why is there no PDF preview", with no way to find out. Each
+ * missing entry carries the install command for THIS distribution, because the
+ * package names differ (poppler-utils on Mint, poppler on Arch).
+ */
+function buildSystem(root: HTMLElement): void {
+  const g = group(root, 'External tools')
+  const intro = el('div', 'opt-hint',
+    'LiqExplorer uses the tools already on your system rather than bundling its own. '
+    + 'Anything missing here simply switches a feature off.')
+  g.appendChild(intro)
+  const list = el('div', 'opt-tools')
+  g.appendChild(list)
+
+  void liq.invoke('toolReport').then((rep: ToolReport) => {
+    intro.textContent = `${rep.distro} — ${rep.items.filter(i => i.present).length} of `
+      + `${rep.items.length} tools found. Anything missing switches a feature off, `
+      + 'it does not break the app.'
+    list.textContent = ''
+    for (const it of rep.items) {
+      const row = el('div', 'opt-tool' + (it.present ? ' is-ok' : it.optional ? ' is-warn' : ' is-bad'))
+      const head = el('div', 'opt-tool-head')
+      head.appendChild(el('span', 'opt-tool-dot', it.present ? '\u2713' : '\u2715'))
+      head.appendChild(el('span', 'opt-tool-name', it.label))
+      head.appendChild(el('span', 'opt-tool-found',
+        it.present ? it.found : it.optional ? 'not installed (optional)' : 'not installed'))
+      row.appendChild(head)
+      row.appendChild(el('div', 'opt-hint', it.needed))
+      if (it.install) {
+        const cmd = el('div', 'opt-tool-cmd')
+        cmd.appendChild(el('code', '', it.install))
+        const copy = el('button', 'btn', 'Copy')
+        copy.addEventListener('click', () => {
+          void navigator.clipboard.writeText(it.install).then(() => { copy.textContent = 'Copied' })
+        })
+        cmd.appendChild(copy)
+        row.appendChild(cmd)
+      }
+      list.appendChild(row)
+    }
+  }).catch(() => { intro.textContent = 'The system check could not run.' })
 }
 
 // ---------------------------------------------------------------- widgets
@@ -103,6 +256,58 @@ function check(
   if (hint) wrap.title = hint
   parent.appendChild(wrap)
   return box
+}
+
+/** a labelled number spinner: "Show N lines of the filename" */
+function numberRow(
+  parent: HTMLElement, before: string, value: number,
+  opts: { min: number; max: number; step?: number; after?: string; hint?: string },
+  onChange: (v: number) => void,
+): HTMLInputElement {
+  const row = el('label', 'opt-check')
+  row.appendChild(el('span', '', before))
+  const input = el('input', 'opt-num')
+  input.type = 'number'
+  input.min = String(opts.min)
+  input.max = String(opts.max)
+  input.step = String(opts.step ?? 1)
+  input.value = String(value)
+  input.addEventListener('change', () => {
+    const n = Math.max(opts.min, Math.min(opts.max, Math.round(Number(input.value) || opts.min)))
+    input.value = String(n)
+    onChange(n)
+  })
+  row.appendChild(input)
+  if (opts.after) row.appendChild(el('span', '', opts.after))
+  if (opts.hint) row.appendChild(el('div', 'opt-hint', opts.hint))
+  parent.appendChild(row)
+  return input
+}
+
+/** a labelled dropdown; values are compared as strings */
+function choiceRow<T extends string | number>(
+  parent: HTMLElement, label: string, value: T,
+  choices: [T, string][], onChange: (v: T) => void, hint?: string,
+): HTMLSelectElement {
+  const row = el('label', 'opt-check')
+  row.appendChild(el('span', '', label))
+  const sel = el('select', 'opt-select')
+  for (const [v, text] of choices) {
+    const o = document.createElement('option')
+    o.value = String(v)
+    o.textContent = text
+    sel.appendChild(o)
+  }
+  sel.value = String(value)
+  sel.addEventListener('change', () => {
+    const raw = sel.value
+    const match = choices.find(c => String(c[0]) === raw)
+    if (match) onChange(match[0])
+  })
+  row.appendChild(sel)
+  if (hint) row.appendChild(el('div', 'opt-hint', hint))
+  parent.appendChild(row)
+  return sel
 }
 
 function radio(
@@ -275,6 +480,28 @@ function buildView(root: HTMLElement): void {
     v => { void app.setSettings({ showStatusBar: v }) })
   check(layout, 'Compact view (tighter rows)', s.compactView,
     v => { void app.setSettings({ compactView: v }) })
+  check(layout, 'Details pane (Alt+Shift+P)', s.showDetailsPane !== false,
+    v => { void app.setSettings({ showDetailsPane: v }) },
+    'The right-hand pane with Preview, Details, Rename, Edit and Doc tabs')
+
+  // ---- how names and sizes are written ----
+  const presentation = group(root, 'Names and sizes')
+  numberRow(presentation, 'Show', s.gridLabelLines || 2,
+    { min: 1, max: 8, after: 'lines of the filename under an icon',
+      hint: 'Longer names are shortened with an ellipsis. Selecting an item always shows the whole name.' },
+    n => { void app.setSettings({ gridLabelLines: n }) })
+  choiceRow(presentation, 'File sizes in', s.sizeUnits === 'binary' ? 'binary' : 'decimal',
+    [['decimal', 'KB, MB, GB (1 KB = 1000 bytes)'], ['binary', 'KiB, MiB, GiB (1 KiB = 1024 bytes)']],
+    v => { void app.setSettings({ sizeUnits: v }) },
+    'Decimal is what Explorer and drive manufacturers print; binary is what the disk actually allocates')
+
+  // ---- work done ahead of time ----
+  const perf = group(root, 'Performance')
+  numberRow(perf, 'Decode', s.preloadNeighbours ?? 2,
+    { min: 0, max: 4, after: 'photos ahead in the viewer',
+      hint: 'Measured on this share: an already-decoded photo opens in 2 ms against 48 ms cold. '
+        + 'Set to 0 on a slow connection, where the extra reads compete with the photo you are looking at.' },
+    n => { void app.setSettings({ preloadNeighbours: n }) })
   check(layout, 'Item check boxes', s.checkboxes,
     v => { void app.setSettings({ checkboxes: v }) })
 
@@ -461,6 +688,34 @@ function buildView(root: HTMLElement): void {
   media.appendChild(cacheBtnRow)
   paintCacheSize()
 
+  // ---- the media surfaces that grew their own behaviour ----
+  const playbackRow = el('div', 'opt-inline')
+  check(playbackRow, 'Remember where you were up to', s.mediaResume !== false,
+    v => { void app.setSettings({ mediaResume: v }) },
+    'Long videos reopen where you left them. Anything under 30 seconds, or watched to the end, is not remembered.')
+  check(playbackRow, 'Play the next file when one ends', s.mediaAutoAdvance !== false,
+    v => { void app.setSettings({ mediaAutoAdvance: v }) })
+  media.appendChild(playbackRow)
+
+  const previewRow = el('div', 'opt-inline')
+  check(previewRow, 'Preview the frame under the scrub bar', s.mediaSeekPreview !== false,
+    v => { void app.setSettings({ mediaSeekPreview: v }) },
+    'Hovering the bar shows that moment as a picture')
+  check(previewRow, 'Turn subtitles on automatically', !!s.subtitleAutoEnable,
+    v => { void app.setSettings({ subtitleAutoEnable: v }) },
+    'Picks the first readable track. Picture-based subtitles (Blu-ray, DVD) can never be shown here.')
+  media.appendChild(previewRow)
+
+  const sheetRow = el('div', 'opt-inline')
+  numberRow(sheetRow, 'Scene-select frames', s.mediaSheetFrames || 12,
+    { min: 4, max: 24, step: 4, hint: 'How many frames the G key lays out across a video' },
+    n => { void app.setSettings({ mediaSheetFrames: n }) })
+  choiceRow(sheetRow, 'Convert video at most', s.mediaMaxHeight || 720,
+    [[480, '480p — fastest'], [720, '720p'], [1080, '1080p'], [1440, '1440p — slowest']],
+    n => { void app.setSettings({ mediaMaxHeight: n }) },
+    'Only applies to files that have to be converted to play at all')
+  media.appendChild(sheetRow)
+
   function paintMedia(): void {
     const on = app.settings.mediaViewer !== false
     kindsRow.classList.toggle('is-off', !on)
@@ -469,6 +724,9 @@ function buildView(root: HTMLElement): void {
     autoRow.classList.toggle('is-off', !on)
     cacheRow.classList.toggle('is-off', !on)
     cacheBtnRow.classList.toggle('is-off', !on)
+    playbackRow.classList.toggle('is-off', !on)
+    previewRow.classList.toggle('is-off', !on)
+    sheetRow.classList.toggle('is-off', !on)
   }
   paintMedia()
 

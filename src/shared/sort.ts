@@ -174,16 +174,32 @@ export function computeGroups(entries: FileEntry[], vs: FolderViewState): Group[
   return groups
 }
 
+/**
+ * Decimal (1 KB = 1000 B, what Explorer and every drive manufacturer print) or
+ * binary (1 KiB = 1024 B, what the file actually occupies in blocks). Set from
+ * the settings once at startup rather than threaded through every call site:
+ * formatSize is called for every row of every listing, and giving it a second
+ * argument would mean touching a hundred callers to answer a display question.
+ */
+let sizeBase = 1000
+let sizeUnitNames = ['KB', 'MB', 'GB', 'TB']
+
+export function setSizeUnits(mode: 'decimal' | 'binary'): void {
+  sizeBase = mode === 'binary' ? 1024 : 1000
+  sizeUnitNames = mode === 'binary'
+    ? ['KiB', 'MiB', 'GiB', 'TiB']
+    : ['KB', 'MB', 'GB', 'TB']
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 0) return ''
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
+  if (bytes < sizeBase) return `${bytes} B`
   let v = bytes
-  for (const u of units) {
-    v /= 1024
-    if (v < 1024) return `${v >= 100 ? Math.round(v) : v.toFixed(v >= 10 ? 1 : 2)} ${u}`
+  for (const u of sizeUnitNames) {
+    v /= sizeBase
+    if (v < sizeBase) return `${v >= 100 ? Math.round(v) : v.toFixed(v >= 10 ? 1 : 2)} ${u}`
   }
-  return `${v.toFixed(1)} PB`
+  return `${v.toFixed(1)} ${sizeBase === 1024 ? 'PiB' : 'PB'}`
 }
 
 export function formatDate(ms: number): string {

@@ -20,6 +20,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
+import { resolveTools } from '../platform/tools'
 import { ipcMain } from 'electron'
 import { CH } from '../../shared/ipc'
 import * as history from '../state/history'
@@ -54,22 +55,15 @@ export interface EditResult { ok: boolean; out?: string; error?: string }
 interface Tools { convert: string[]; identify: string[] }
 let toolsPromise: Promise<Tools> | null = null
 
-function which(bin: string): Promise<boolean> {
-  return new Promise(resolve => {
-    try {
-      const c = spawn(bin, ['-version'], { stdio: 'ignore' })
-      c.on('error', () => resolve(false))
-      c.on('close', code => resolve(code === 0))
-    } catch { resolve(false) }
-  })
-}
-
 async function tools(): Promise<Tools> {
   if (!toolsPromise) {
     toolsPromise = (async () => {
       // IM7 ships `magick`; this machine has IM6, where the binary is `convert`
-      if (await which('magick')) return { convert: ['magick'], identify: ['magick', 'identify'] }
-      return { convert: ['convert'], identify: ['identify'] }
+      // one shared answer; falling back to a bare 'convert' without checking it
+      // exists meant a machine with neither failed inside the edit rather than
+      // saying so up front
+      const t = resolveTools()
+      return { convert: t.convert, identify: t.identify }
     })()
   }
   return toolsPromise

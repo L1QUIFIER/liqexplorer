@@ -38,7 +38,7 @@
 // mount waits for an explicit click.
 import type { FileEntry } from '../../shared/types'
 import { formatDate, formatSize, typeLabelFor } from '../../shared/sort'
-import { liq } from '../core/app'
+import { app, liq } from '../core/app'
 import { iconURL } from './items'
 import {
   PREVIEW, classifyPreview, likelyPlayable, previewURL,
@@ -46,6 +46,8 @@ import {
 } from '../../shared/preview'
 import { PEEK } from '../../shared/peek'
 import { renderMedia, type MediaItem } from '../media/render'
+import { openInMediaViewer } from '../media/overlay'
+import type { Identified } from '../../shared/identify'
 
 /** FileEntry carries everything MediaItem needs; this is the narrowing. */
 function toItem(e: FileEntry): MediaItem {
@@ -401,6 +403,42 @@ export function rowIcon(icons: string[]): HTMLImageElement {
 function renderOther(host: PreviewHost, e: FileEntry, missText = 'No preview available.'): void {
   const s = stage(host.body)
   thumb(e, s, () => { if (host.alive()) note(host.body, missText) })
+  // "No preview available" is where a user gets stuck: a row they cannot act on
+  // and no idea why. Ask what the BYTES say and offer the few things worth
+  // trying. Only for files the system could not name — everything else already
+  // says what it is.
+  if (e.mime === 'application/octet-stream' && e.path.startsWith('/') && e.size > 0) {
+    void liq.invoke('identifyFile', e.path).then((id: Identified | null) => {
+      if (!host.alive() || !id) return
+      const box = el('div', 'pvr-identify')
+      box.appendChild(el('div', 'pvr-idwhy', id.why))
+      for (const sug of id.suggestions) {
+        const b = el('button', 'mvr-btn', sug.label)
+        b.addEventListener('click', () => runSuggestion(sug.id, e))
+        box.appendChild(b)
+      }
+      host.body.appendChild(box)
+    }).catch(() => { /* unreadable: the note above is all there is to say */ })
+  }
+}
+
+/** the actions offered for an unidentified file */
+function runSuggestion(id: Identified['suggestions'][number]['id'], e: FileEntry): void {
+  switch (id) {
+    case 'view': case 'text':
+      // force it into the viewer, which reads the bytes rather than the name.
+      // If even that cannot show it, hand it to the desktop's own application
+      // rather than leaving the button doing nothing.
+      if (!openInMediaViewer(e, [e], { force: true })) void liq.openPath(e.path)
+      break
+    case 'openwith':
+      // there is no chooser dialog to call here, and inventing a button that
+      // silently does nothing is worse than sending it to the default handler
+      void liq.openPath(e.path)
+      break
+    case 'rename': app.emit('start-rename', e.path); break
+    case 'properties': app.emit('show-properties', [e.path]); break
+  }
 }
 
 /**

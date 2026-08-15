@@ -377,6 +377,25 @@ export interface AppSettings {
    *  over 4 GB are never converted. Off leaves everything on the live stream,
    *  which already plays. */
   mediaTranscodeCache: boolean
+  /** show the storyboard frame + timestamp when hovering the scrub bar */
+  mediaSeekPreview: boolean
+  /** remember where you were up to in long videos */
+  mediaResume: boolean
+  /** play the next item in the folder when one finishes */
+  mediaAutoAdvance: boolean
+  /** frames in the scene-select grid (G) */
+  mediaSheetFrames: number
+  /** tallest picture the transcoder will produce; lower is faster and smaller */
+  mediaMaxHeight: number
+  /** turn on the first text subtitle track automatically when one exists */
+  subtitleAutoEnable: boolean
+  /** how many neighbouring photos to decode ahead in the viewer */
+  preloadNeighbours: number
+  // --- presentation ---
+  /** lines of filename shown under an unselected icon before it ellipsises */
+  gridLabelLines: number
+  /** 1 KB = 1000 bytes (decimal, like Explorer) or 1024 (binary) */
+  sizeUnits: 'decimal' | 'binary'
   // --- peek popover (renderer: views/peek.ts) ---
   /** open a peek when the pointer rests on an item. Off still leaves Space,
    *  which is the shortcut people who dislike hover surfaces actually want. */
@@ -400,7 +419,7 @@ export interface AppSettings {
   // --- FileFinder: an index served by a server on the LAN (opt-in, off by
   // default — this ships publicly and nobody else has one of these) ---
   filefinderEnabled: boolean
-  /** base URL of the FileFinder service, e.g. http://127.0.0.1:8090 (user-configured) */
+  /** base URL of the FileFinder service, e.g. http://127.0.0.1:8090 */
   filefinderUrl: string
   /**
    * Override the server-path -> local-mount mapping, '<server root>=<local mount>'
@@ -466,6 +485,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mediaViewerWheelNav: true,
   mediaViewerWheelInvert: false,
   mediaTranscodeCache: true,
+  mediaSeekPreview: true,
+  mediaResume: true,
+  mediaAutoAdvance: true,
+  mediaSheetFrames: 12,
+  mediaMaxHeight: 720,
+  subtitleAutoEnable: false,
+  preloadNeighbours: 2,
+  gridLabelLines: 2,
+  sizeUnits: 'decimal',
   hoverPeek: true,
   // 1.4 s: long enough that crossing a list never flashes popovers, short
   // enough that resting on a folder feels like it answered you

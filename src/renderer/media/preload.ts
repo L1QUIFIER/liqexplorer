@@ -27,8 +27,16 @@ import type { MediaItem } from './render'
 
 /** how far ahead / behind to warm. Forward-weighted: next is pressed far more
  *  often than previous, and every extra slot is another decoded bitmap in RAM */
-const AHEAD = 2
-const BEHIND = 1
+let AHEAD = 2
+let BEHIND = 1
+
+/** Set from the settings. 0 disables warming entirely, which is the right
+ *  choice on a slow share where the extra reads compete with the photo the
+ *  user is actually looking at. */
+export function setPreloadDepth(ahead: number): void {
+  AHEAD = Math.max(0, Math.min(4, Math.floor(ahead) || 0))
+  BEHIND = AHEAD > 0 ? 1 : 0
+}
 
 /** above this a single preload would monopolise the share for seconds and make
  *  the photo the user is ACTUALLY looking at slower to load. Panoramas and

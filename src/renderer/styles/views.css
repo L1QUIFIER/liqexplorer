@@ -161,7 +161,7 @@ img.vh-thumbimg { border-radius: 2px; }
      BELOW the two lines -webkit-line-clamp reserves (26px for a 30px clamp), so
      the second line was sliced in half and no ellipsis was ever drawn. */
   flex: none;
-  min-height: 30px;
+  min-height: calc(var(--grid-label-lines, 2) * 15px);
   /* DESCENDERS. A -webkit-box clamped to N lines is exactly N*line-height tall,
      but the font's ink for the last line runs ~1px past that — measured:
      scrollHeight 91 against clientHeight 90 at six lines, and the same +1 at
@@ -177,7 +177,10 @@ img.vh-thumbimg { border-radius: 2px; }
   line-height: 15px;
   white-space: normal;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  /* set from the settings (core/app.ts applyDisplaySettings): how many lines of
+     a long filename to show before ellipsising. Two is Explorer's answer; the
+     photo folders on this machine have names that need more. */
+  -webkit-line-clamp: var(--grid-label-lines, 2);
   -webkit-box-orient: vertical;
   word-break: break-word;
 }
@@ -578,3 +581,7 @@ body.is-colresizing * { cursor: col-resize !important; }
 .pv-body .pv-audiohost .mvr-audio { display: block; width: 100%; }
 .pv-body .pv-audiohost .mvr-note,
 .pv-body .pv-stage .mvr-note { font-size: var(--fs-caption); color: var(--text-secondary); padding: 6px 2px; }
+
+/* "what is this?" panel for a file the system could not name (fs/sniff.ts) */
+.pvr-identify { display: flex; flex-direction: column; gap: 6px; padding: 8px 2px 2px; }
+.pvr-idwhy { color: var(--text-secondary); font-size: var(--fs-caption); }

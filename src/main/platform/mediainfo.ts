@@ -42,6 +42,7 @@ import type { Stats } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import { CH } from '../../shared/ipc'
+import { resolveTools } from './tools'
 import type { FactRow, FactsKind, FileFacts } from '../../shared/facts'
 import type { StreamInfo } from '../../shared/playplan'
 import { formatDate, formatSize } from '../../shared/sort'
@@ -325,7 +326,12 @@ async function probeImage(p: string, ms: number): Promise<{ rows: FactRow[]; err
   // one identify run for both the raster facts and the EXIF dump; the wildcard
   // is what keeps the stderr clean (see header)
   const fmt = `%m\n%w\n%h\n%[colorspace]\n%z\n${IDENTIFY_SEP}\n%[EXIF:*]`
-  const r = await run('identify', ['-quiet', '-format', fmt, `${p}[0]`], ms)
+  // resolveTools, not a bare 'identify': ImageMagick 7 (Arch, Fedora) ships only
+  // `magick`, so this spawned a command that does not exist there and image
+  // dimensions silently disappeared
+  const im = resolveTools().identify
+  if (!im.length) return { rows: [], error: 'ImageMagick is not installed.' }
+  const r = await run(im[0], [...im.slice(1), '-quiet', '-format', fmt, `${p}[0]`], ms)
   if (r.timedOut) return { rows: [], error: TIMED_OUT }
   const sep = r.out.indexOf(IDENTIFY_SEP)
   const head = (sep < 0 ? r.out : r.out.slice(0, sep)).split('\n')

@@ -55,6 +55,16 @@ export interface ViewerOptions {
   /** tallest transcoded picture worth producing; a floating panel is small, a
    *  pop-out window can be a whole screen */
   maxHeight?: number
+  /** storyboard frame on scrub hover */
+  seekPreview?: boolean
+  /** remember and restore the playback position */
+  resume?: boolean
+  /** play the next item when one finishes */
+  autoAdvance?: boolean
+  /** frames in the scene-select grid */
+  sheetFrames?: number
+  /** switch the first text subtitle track on by itself */
+  subtitleAuto?: boolean
   /** rate / file / recycle without the mouse. Supplied only by hosts that can
    *  see the app; the pop-out window renders the same viewer without it. */
   triage?: TriageHooks
@@ -97,6 +107,10 @@ const ICONS = {
   unfull: '<path d="M6 2.6V6H2.6M10 6V2.6M10 6h3.4M10 13.4V10h3.4M6 10v3.4M6 10H2.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   close: '<path d="M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   grid: '<rect x="1.8" y="2.4" width="5" height="4.6" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.2" y="2.4" width="5" height="4.6" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.8" y="9" width="5" height="4.6" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9.2" y="9" width="5" height="4.6" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/>',
+  strip: '<rect x="1.4" y="4.4" width="4" height="7.2" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="6" y="4.4" width="4" height="7.2" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="10.6" y="4.4" width="4" height="7.2" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.2"/>',
+  star: '<path d="M8 1.8l1.85 3.9 4.25.6-3.1 3 .75 4.25L8 11.55 4.25 13.55 5 9.3 1.9 6.3l4.25-.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+  loop: '<path d="M4.2 5.4h6.2a2.4 2.4 0 0 1 0 4.8H9M11.8 10.6H5.6a2.4 2.4 0 0 1 0-4.8H7" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8.9 3.9 10.4 5.4 8.9 6.9M7.1 12.1 5.6 10.6 7.1 9.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+  more: '<circle cx="3.4" cy="8" r="1.15"/><circle cx="8" cy="8" r="1.15"/><circle cx="12.6" cy="8" r="1.15"/>',
   cc: '<rect x="1.6" y="3.2" width="12.8" height="9.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.6 6.8a1.8 1.8 0 1 0 0 2.4M11.4 6.8a1.8 1.8 0 1 0 0 2.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
   zoomIn: '<circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M10.3 10.3 14 14M7 4.9v4.2M4.9 7h4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
   zoomOut: '<circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M10.3 10.3 14 14M4.9 7h4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
@@ -250,7 +264,46 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   tracksBtn.hidden = true
   const sheetBtn = iconBtn('mv-sheet', ICONS.grid, 'Jump to a scene (G)')
   sheetBtn.hidden = true
-  bar.append(playBtn, timeNow, scrub, timeEnd, sheetBtn, tracksBtn, muteBtn, vol, rateSel)
+  /**
+   * The tools that had no button.
+   *
+   * Filmstrip, triage and looping were reachable only by pressing S, T and L —
+   * which nobody can guess, so from the outside the player looked like a plain
+   * transport bar with nothing else in it. Every one of them now has a control,
+   * and the overflow menu lists the whole key map so the shortcuts are
+   * learnable rather than secret.
+   *
+   * Built twice because video and images use different bars (transport vs
+   * zoom) and exactly one is ever visible; a shared row would have meant
+   * restructuring the layout for no gain.
+   */
+  function toolButtons(): HTMLElement[] {
+    const stripBtn = iconBtn('mv-tool mv-tool-strip', ICONS.strip, 'Filmstrip (S)')
+    stripBtn.addEventListener('click', () => { strip.toggle(); layout(); syncTools() })
+    const rateBtn = iconBtn('mv-tool mv-tool-rate', ICONS.star, 'Rate and sort (T)')
+    rateBtn.addEventListener('click', () => { triage?.toggle(); syncTools() })
+    if (!opts.triage) rateBtn.hidden = true
+    const loopBtn = iconBtn('mv-tool mv-tool-loop', ICONS.loop, 'Loop a section (L)')
+    loopBtn.addEventListener('click', () => { cycleLoop(); syncTools() })
+    const moreBtn = iconBtn('mv-tool mv-tool-more', ICONS.more, 'More')
+    moreBtn.addEventListener('click', () => openMoreMenu(moreBtn))
+    return [stripBtn, rateBtn, loopBtn, moreBtn]
+  }
+  const videoTools = toolButtons()
+  const imageTools = toolButtons()
+
+  /** keep the toggles looking like what they are */
+  function syncTools(): void {
+    for (const set of [videoTools, imageTools]) {
+      set[0]?.classList.toggle('is-on', strip.isOn())
+      set[1]?.classList.toggle('is-on', !!triage?.isOn())
+      set[2]?.classList.toggle('is-on', loopIn !== null)
+      // looping is meaningless for a still picture
+      if (set[2]) set[2].hidden = kind !== 'video' && kind !== 'audio'
+    }
+  }
+
+  bar.append(playBtn, timeNow, scrub, timeEnd, sheetBtn, tracksBtn, ...videoTools, muteBtn, vol, rateSel)
 
   // zoom bar (images)
   const zoomBar = el('div', 'mv-bar mv-zoombar')
@@ -260,7 +313,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   const zoomLabel = el('button', 'mv-zoomlabel', '100%')
   zoomLabel.title = 'Actual size (1)'
   const dims = el('span', 'mv-dims')
-  zoomBar.append(zoomOutBtn, zoomLabel, zoomInBtn, fitBtn, dims)
+  zoomBar.append(zoomOutBtn, zoomLabel, zoomInBtn, fitBtn, dims, ...imageTools)
 
   // below the bars, not inside the stage: the strip is navigation, not an
   // overlay on the picture, and it must not eat into the image the way the
@@ -326,6 +379,8 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     // an undecodable video is still kind 'video', and showing its transport put
     // a play button that did nothing and a frozen 0:00 under the codec notice
     bar.hidden = !handle.media
+    root.querySelector('.mv-moremenu')?.remove()
+    syncTools()
     stage.querySelector('.mv-sheetgrid')?.remove()
     hideSeekPreview()
     clearLoop()
@@ -363,6 +418,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
    */
   function requestResume(path: string): void {
     resumeAt = 0
+    if (opts.resume === false) return
     const token = ++resumeToken
     if (!handle?.media || !path.startsWith('/')) return
     void window.liq?.invoke?.('getResume', [path])
@@ -393,6 +449,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   /** Persist the current position. The store decides whether it is worth
    *  keeping (too early / too near the end / too short) — see shared/resume.ts. */
   function saveResume(): void {
+    if (opts.resume === false) return
     const m = handle?.media
     const path = handle?.item.path
     if (!m || !path || !path.startsWith('/')) return
@@ -501,6 +558,12 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
       const worth = (t.subs?.length ?? 0) > 0 || (t.audio?.length ?? 0) > 1
       tracksBtn.hidden = !worth
       subs = attachSubtitles(m, item.path, () => handle?.stream, (msg) => showNote(msg))
+      // switch the first readable track on by itself when asked to; bitmap
+      // tracks are skipped because nothing can display them here
+      if (opts.subtitleAuto) {
+        const first = t.subs?.find(x => x.textBased)
+        if (first) void subs.select(first.n)
+      }
     }).catch(() => { /* no ffprobe: no menu, playback unaffected */ })
   }
 
@@ -580,7 +643,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     sheetBusy = true
     sheetBtn.classList.add('is-busy')
     try {
-      const frames = await window.liq?.invoke?.('contactSheet', item.path, 12)
+      const frames = await window.liq?.invoke?.('contactSheet', item.path, opts.sheetFrames ?? 12)
         .catch(() => []) as { file: string; at: number }[]
       if (destroyed || !frames?.length) {
         if (!destroyed) showNote('No frames could be taken from this file.')
@@ -673,7 +736,10 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     })
     // walking a folder of clips: the next one starts when this one finishes,
     // and stops at the end rather than looping the folder for ever
-    m.addEventListener('ended', () => { if (index < items.length - 1) { pendingPlay = true; show(index + 1) } })
+    m.addEventListener('ended', () => {
+      if (opts.autoAdvance === false) return
+      if (index < items.length - 1) { pendingPlay = true; show(index + 1) }
+    })
   }
 
   // ------------------------------------------------------------- transport UI
@@ -825,6 +891,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   }
 
   function showSeekPreview(clientX: number): void {
+    if (opts.seekPreview === false) { hideSeekPreview(); return }
     const item = items[index]
     if (!mediaDuration() || kind !== 'video' || !item) { hideSeekPreview(); return }
     const at = timeAtClientX(clientX)
@@ -934,6 +1001,51 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     if (Math.abs(e.clientX - from.x) > CLICK_SLOP || Math.abs(e.clientY - from.y) > CLICK_SLOP) return
     startRename()
   })
+
+  /**
+   * Everything the viewer can do, with its key.
+   *
+   * Doubles as the key map: a shortcut nobody can discover is a shortcut nobody
+   * uses, and this player had six of them hidden behind letters.
+   */
+  function openMoreMenu(anchor: HTMLElement): void {
+    root.querySelector('.mv-moremenu')?.remove()
+    const menu = el('div', 'mv-moremenu')
+    const isMedia = kind === 'video' || kind === 'audio'
+    const entries: { label: string; key: string; on?: boolean; enabled: boolean; run: () => void }[] = [
+      { label: 'Filmstrip', key: 'S', on: strip.isOn(), enabled: items.length > 1,
+        run: () => { strip.toggle(); layout() } },
+      { label: 'Rate and sort', key: 'T', on: !!triage?.isOn(), enabled: !!opts.triage,
+        run: () => triage?.toggle() },
+      { label: 'Scene select', key: 'G', enabled: kind === 'video', run: () => { void toggleSheet() } },
+      { label: loopIn === null ? 'Loop a section' : 'Clear the loop', key: 'L',
+        on: loopIn !== null, enabled: isMedia, run: () => cycleLoop() },
+      { label: 'Rename…', key: 'F2', enabled: !!items[index]?.path.startsWith('/'), run: () => startRename() },
+      { label: 'Fullscreen', key: 'F', enabled: true, run: () => opts.onFullscreen?.() },
+      { label: 'Open in another application', key: '', enabled: !!items[index],
+        run: () => { void window.liq?.openPath?.(items[index].path) } },
+    ]
+    for (const e of entries) {
+      const b = el('button', 'mv-moreitem')
+      b.classList.toggle('is-on', !!e.on)
+      b.appendChild(el('span', '', e.label))
+      if (e.key) b.appendChild(el('kbd', '', e.key))
+      b.disabled = !e.enabled
+      if (e.enabled) b.addEventListener('click', () => { menu.remove(); e.run(); syncTools() })
+      menu.appendChild(b)
+    }
+    const away = (ev: MouseEvent): void => {
+      if (menu.contains(ev.target as Node) || ev.target === anchor) return
+      menu.remove()
+      document.removeEventListener('mousedown', away, true)
+    }
+    document.addEventListener('mousedown', away, true)
+    root.appendChild(menu)
+    const ar = anchor.getBoundingClientRect()
+    const rr = root.getBoundingClientRect()
+    menu.style.right = `${Math.max(6, rr.right - ar.right)}px`
+    menu.style.bottom = `${rr.bottom - ar.top + 6}px`
+  }
 
   function togglePlay(): void {
     const m = handle?.media
@@ -1117,7 +1229,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   function handleKey(e: KeyboardEvent): boolean {
     if (e.ctrlKey || e.metaKey || e.altKey) return false
     // first refusal: while the deck is up the digits mean ratings, not zoom
-    if (triage?.handleKey(e)) return true
+    if (triage?.handleKey(e)) { syncTools(); return true }
     const k = e.key
     const media = handle?.media
     switch (k) {
@@ -1150,13 +1262,15 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
       case 'f': case 'F':
         opts.onFullscreen?.(); return true
       case 's': case 'S':
-        strip.toggle(); layout(); return true
+        // syncTools so the button reflects the keyboard — a toggle that is on
+        // but does not look on is worse than no button at all
+        strip.toggle(); layout(); syncTools(); return true
       case 'g': case 'G':
         if (kind !== 'video') return false
         void toggleSheet(); return true
       case 'l': case 'L':
         if (!handle?.media) return false
-        cycleLoop(); return true
+        cycleLoop(); syncTools(); return true
       case 'F2':
         startRename(); return true
       case '+': case '=':

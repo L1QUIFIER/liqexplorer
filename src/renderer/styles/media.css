@@ -702,3 +702,53 @@
   color: var(--text-primary);
   font: inherit;
 }
+
+/* ------------------------------------------------ viewer tool buttons
+   Filmstrip / rate / loop / more. These exist because the features behind
+   them were keyboard-only, which made the player look like it had nothing
+   in it. `is-on` marks a toggle that is currently active. */
+.mv-tool.is-on { color: var(--accent); }
+.mv-tool[hidden] { display: none; }
+
+.mv-moremenu {
+  position: absolute;
+  z-index: 9;
+  min-width: 210px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bg-float);
+  backdrop-filter: var(--float-blur);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+}
+.mv-moreitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+.mv-moreitem span { flex: 1; }
+.mv-moreitem kbd {
+  font: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  min-width: 17px;
+  padding: 0 4px;
+  text-align: center;
+  border-radius: 3px;
+  background: var(--bg-float-solid);
+  border: 1px solid var(--stroke);
+  color: var(--text-secondary);
+}
+.mv-moreitem:hover:not(:disabled) { background: var(--bg-hover); }
+.mv-moreitem:disabled { color: var(--text-disabled); cursor: default; }
+.mv-moreitem.is-on { color: var(--accent); }

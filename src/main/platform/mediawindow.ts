@@ -129,8 +129,14 @@ function createPopout(sender: Electron.WebContents, payload: PopoutPayload): num
     if (target.split(/[?#]/)[0] !== pageUrl) e.preventDefault()
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  sessions.set(win.webContents.id, payload)
-  win.on('closed', () => sessions.delete(win.webContents.id))
+  // Capture the id NOW. By the time 'closed' fires the WebContents is already
+  // destroyed, and reading win.webContents.id from inside that handler throws
+  // "Object has been destroyed" — which, being an uncaught exception in the
+  // main process, tears the whole app down with an error dialog. Closing a
+  // popped-out player is an ordinary thing to do, so this crashed on ordinary use.
+  const wcId = win.webContents.id
+  sessions.set(wcId, payload)
+  win.on('closed', () => sessions.delete(wcId))
   win.once('ready-to-show', () => win.show())
   void win.loadFile(page)
   return win.id

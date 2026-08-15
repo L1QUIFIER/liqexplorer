@@ -33,19 +33,32 @@ if [ -n "${current:-}" ] && ps -p "$current" -o args= 2>/dev/null | grep -q file
   exit 0
 fi
 
-had_icons="$(gsettings get org.nemo.desktop show-desktop-icons 2>/dev/null || echo true)"
-
-if [ "$had_icons" = "true" ]; then
-  gsettings set org.nemo.desktop show-desktop-icons false
-  sleep 1
+# The nemo-desktop dance is CINNAMON-SPECIFIC. On Arch, KDE, GNOME or a bare
+# window manager there is no org.nemo.desktop schema and no nemo-desktop to
+# stand aside — the name is either free or held by that desktop's own file
+# manager, and either way the claim below is all that is needed. Running
+# `gsettings set` against a schema that does not exist aborts the script under
+# `set -e`, so it is gated rather than attempted-and-ignored.
+have_nemo_schema=no
+if gsettings list-schemas 2>/dev/null | grep -qx 'org.nemo.desktop'; then
+  have_nemo_schema=yes
 fi
-pkill -x nemo-desktop 2>/dev/null || true
-sleep 2
+
+had_icons=false
+if [ "$have_nemo_schema" = yes ]; then
+  had_icons="$(gsettings get org.nemo.desktop show-desktop-icons 2>/dev/null || echo false)"
+  if [ "$had_icons" = "true" ]; then
+    gsettings set org.nemo.desktop show-desktop-icons false
+    sleep 1
+  fi
+  pkill -x nemo-desktop 2>/dev/null || true
+  sleep 2
+fi
 
 setsid "$HELPER" >/dev/null 2>&1 < /dev/null &
 # give it a moment to actually own the name before nemo-desktop is invited back
 sleep 3
 
-if [ "$had_icons" = "true" ]; then
+if [ "$have_nemo_schema" = yes ] && [ "$had_icons" = "true" ]; then
   gsettings set org.nemo.desktop show-desktop-icons true
 fi

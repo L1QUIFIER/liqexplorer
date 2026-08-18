@@ -223,7 +223,7 @@ export function createDocPage(): InspectorPage {
     const box = el('div', 'dc-notice')
     box.appendChild(el('div', 'dc-notice-text', message))
     if (canOpen) {
-      button(box, 'Open in another app', 'Hand this file to the app the system opens it with',
+      button(box, 'Open with…', 'Open with the default application',
         () => { void liq.openPath(e.path) }, 'btn')
     }
     body.appendChild(box)
@@ -335,7 +335,7 @@ export function createDocPage(): InspectorPage {
     const undoRow = el('div', 'dc-actions dc-undorow')
     undoBtn = button(undoRow, '↶ Undo', 'Nothing to undo', () => doUndo())
     redoBtn = button(undoRow, '↷ Redo', 'Nothing to redo', () => doRedo())
-    saveUndoBtn = button(undoRow, 'Undo the save', 'Put back what this file held before the last save, and write that to disk',
+    saveUndoBtn = button(undoRow, 'Undo save', 'Restore the previous contents and save',
       () => void undoSave())
     saveUndoBtn.classList.add('dc-undosave')
     saveUndoBtn.hidden = true
@@ -358,7 +358,7 @@ export function createDocPage(): InspectorPage {
         () => { asUtf8 = true; void doSave(false) }, 'btn')
       u.classList.add('dc-utf8')
     }
-    button(actions, 'Reload', 'Throw away changes here and read the file again', () => {
+    button(actions, 'Reload', 'Discard changes and reload from disk', () => {
       const e = entry
       if (!e) return
       // a reload is a deliberate "forget what I did", so the history goes with
@@ -823,15 +823,27 @@ export function createDocPage(): InspectorPage {
     }
 
     const saves = el('div', 'dc-actions')
-    const copy = button(saves, 'Save a copy', 'Write a new PDF beside the original',
+    const copy = button(saves, 'Save a copy', 'Save as a new PDF next to the original',
       () => void applyPages({ mode: 'copy' }, 'edited'), 'btn btn-primary')
     copy.disabled = !pdfDirty()
-    const extract = button(saves, `Extract${n ? ` ${n}` : ''}`, 'Write just the selected pages to a new PDF',
+    const extract = button(saves, `Extract${n ? ` ${n}` : ''}`, 'Save the selected pages as a new PDF',
       () => void applyPages({ mode: 'copy' }, 'pages', order.filter((_, i) => selected.has(i))), 'btn')
     extract.disabled = n === 0
-    button(saves, 'Folder…', 'Write the new PDF into a folder you choose', () => void saveToFolder(), 'btn')
-    button(saves, 'Add PDF…', 'Append another PDF to the end of this one', () => void addPdf(), 'btn')
-    const rep = button(saves, 'Replace…', 'Replace the original (it goes to the Recycle Bin first)', () => {
+    button(saves, 'Folder…', 'Save to a folder you choose', () => void saveToFolder(), 'btn')
+    button(saves, 'Add PDF…', 'Add another PDF to the end', () => void addPdf(), 'btn')
+    // Pictures, not another PDF. The page number is handed over so the dialog
+    // can offer "this page" — from here the user is looking at a specific one,
+    // and re-finding it in a page-range box would be busywork.
+    button(saves, 'As pictures…', 'Save these pages as image files (PNG, JPEG, WebP, SVG…)', () => {
+      const first = [...selected].sort((a, b) => a - b)[0]
+      app.emit('show-pdf-export', {
+        path: entry?.path,
+        // `order` holds ORIGINAL page numbers, so a reordered document still
+        // names the page the export engine will actually render
+        page: first === undefined ? undefined : order[first] + 1,
+      })
+    }, 'btn')
+    const rep = button(saves, 'Replace…', 'Replace the original (moved to the Recycle Bin first)', () => {
       app.emit('show-confirm', {
         title: 'Replace the original?',
         message: `"${entry?.name}" will be rebuilt with ${order.length} page${order.length === 1 ? '' : 's'}. `

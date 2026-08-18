@@ -15,7 +15,15 @@ export function broadcast(channel: string, payload: unknown): void {
   for (const w of windows) if (!w.isDestroyed()) w.webContents.send(channel, payload)
 }
 
-export interface OpenRequest { open?: string; select?: string; properties?: boolean }
+export interface OpenRequest {
+  open?: string
+  select?: string
+  properties?: boolean
+  /** file-picker mode: this window is answering another application's file
+   *  dialog request, so it grows an accept/cancel bar and never restores the
+   *  saved session. See main/pick.ts. */
+  pick?: boolean
+}
 
 export function createWindow(request?: string | OpenRequest): BrowserWindow {
   const req: OpenRequest = typeof request === 'string' ? { open: request } : (request ?? {})
@@ -54,6 +62,17 @@ export function createWindow(request?: string | OpenRequest): BrowserWindow {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.on('closed', () => windows.delete(win))
   win.once('ready-to-show', () => win.show())
+
+  // Renderer console -> the run log.
+  //
+  // Without this the window's own errors are visible only in devtools, which is
+  // exactly where nobody is looking when the app has frozen on launch. Warnings
+  // and errors only: routine logging would bury the thing worth finding.
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level < 2) return                       // 0 verbose, 1 info, 2 warning, 3 error
+    const where = sourceId ? ` (${sourceId.split('/').pop()}:${line})` : ''
+    console.warn(`[renderer] ${message}${where}`)
+  })
   const send = () => !win.isDestroyed() &&
     win.webContents.send(PUSH.windowState, { maximized: win.isMaximized() })
   win.on('maximize', send)
@@ -66,6 +85,7 @@ export function createWindow(request?: string | OpenRequest): BrowserWindow {
       // straight to its properties (FileManager1's ShowItemProperties)
       ...(req.select ? { select: req.select } : {}),
       ...(req.properties ? { properties: '1' } : {}),
+      ...(req.pick ? { pick: '1' } : {}),
     },
   })
   return win

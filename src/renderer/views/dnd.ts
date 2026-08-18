@@ -9,6 +9,7 @@ import type { FileEntry } from '../../shared/types'
 import { dirname, iconURL } from './items'
 import { defaultDragEffect } from './rightdrag'
 import { transferWithConfirm } from '../core/confirmmove'
+import { autoScrollStop } from './autoscroll'
 
 export interface DnDHost {
   scroller: HTMLElement
@@ -50,15 +51,6 @@ function buildDragImage(entry: FileEntry, count: number): HTMLElement {
     wrap.appendChild(b)
   }
   return wrap
-}
-
-function edgeScroll(scroller: HTMLElement, clientY: number): void {
-  const r = scroller.getBoundingClientRect()
-  if (clientY < r.top + 12) {
-    scroller.scrollTop -= Math.min(64, 4 + (r.top + 12 - clientY) * 1.5)
-  } else if (clientY > r.bottom - 12) {
-    scroller.scrollTop += Math.min(64, 4 + (clientY - (r.bottom - 12)) * 1.5)
-  }
 }
 
 export function wireDnD(host: DnDHost): void {
@@ -131,64 +123,80 @@ export function wireDnD(host: DnDHost): void {
       el?.classList.add('drop-target')
     }
     host.scroller.classList.toggle('vh-drop-bg', !folder)
-    edgeScroll(host.scroller, e.clientY)
   })
 
   host.scroller.addEventListener('dragleave', (e) => {
-    if (!host.scroller.contains(e.relatedTarget as Node)) clearMarks()
+    if (!host.scroller.contains(e.relatedTarget as Node)) { clearMarks(); autoScrollStop() }
   })
 
   host.scroller.addEventListener('drop', (e) => {
+    autoScrollStop()
     const dt = e.dataTransfer
     const t = host.tab()
     if (!dt || !t) return
     e.preventDefault()
     const over = host.entryFromEvent(e.target)
     const folder = over && over.isDir ? over : null
-    const dest = folder ? folder.path : t.path
     clearMarks()
-
-    let sources: string[] = []
-    let internal = false
-    const internalRaw = dt.getData('application/x-liq-paths')
-    if (internalRaw) {
-      internal = true
-      try { sources = JSON.parse(internalRaw) as string[] } catch { sources = [] }
-    } else if (dt.files && dt.files.length) {
-      for (const f of Array.from(dt.files)) {
-        try {
-          const p = liq.pathForFile(f)
-          if (p) sources.push(p)
-        } catch { /* not a filesystem file */ }
-      }
-    } else {
-      for (const line of dt.getData('text/uri-list').split(/\r?\n/)) {
-        const s = line.trim()
-        if (!s || s.startsWith('#') || !s.startsWith('file://')) continue
-        try { sources.push(decodeURIComponent(new URL(s).pathname)) } catch { /* bad uri */ }
-      }
-    }
-    dragPaths = null
-    if (!sources.length) return
-
-    if (t.path === 'trash://' && !folder) {
-      if (internal) void liq.startOp({ kind: 'trash', sources })
-      return
-    }
-    if (dest.includes('://')) return
-
-    // Alt (or Ctrl+Shift) drops a shortcut, like Explorer
-    const kind: 'copy' | 'move' | 'symlink' = !internal ? 'copy'
-      : (e.altKey || (e.ctrlKey && e.shiftKey)) ? 'symlink'
-        : e.ctrlKey ? 'copy'
-          : e.shiftKey ? 'move'
-            : defaultDragEffect(sources[0], dest)
-    let filtered = sources.filter(s => dest !== s && !dest.startsWith(s + '/'))
-    if (kind === 'move') filtered = filtered.filter(s => dirname(s) !== dest)
-    else if (!folder && !internal && kind === 'copy') filtered = filtered.filter(s => dirname(s) !== dest)
-    if (!filtered.length) return
-    // opt-in guard against the stray drag that silently moves a folder, plus
-    // safe mode's check for the drop that was clearly not intended
-    transferWithConfirm(kind, filtered, dest, app.settings.confirmDrop)
+    dropOntoPath(folder ? folder.path : t.path, dt, e, { intoFolder: !!folder })
   })
+}
+
+/**
+ * Carry out a drop onto a destination path.
+ *
+ * Extracted so the tab strip can use it: dropping files ON a tab means "put
+ * these in that tab's folder", and that has to behave identically to dropping
+ * them in the file list — same move/copy/shortcut rules, same guards, same
+ * confirmation. Two implementations of this would disagree eventually, and the
+ * disagreement would be about whether your files got moved.
+ */
+export function dropOntoPath(
+  dest: string,
+  dt: DataTransfer,
+  mods: { ctrlKey: boolean; shiftKey: boolean; altKey: boolean },
+  opts: { intoFolder?: boolean } = {},
+): void {
+  let sources: string[] = []
+  let internal = false
+  const internalRaw = dt.getData('application/x-liq-paths')
+  if (internalRaw) {
+    internal = true
+    try { sources = JSON.parse(internalRaw) as string[] } catch { sources = [] }
+  } else if (dt.files && dt.files.length) {
+    for (const f of Array.from(dt.files)) {
+      try {
+        const p = liq.pathForFile(f)
+        if (p) sources.push(p)
+      } catch { /* not a filesystem file */ }
+    }
+  } else {
+    for (const line of dt.getData('text/uri-list').split(/\r?\n/)) {
+      const s = line.trim()
+      if (!s || s.startsWith('#') || !s.startsWith('file://')) continue
+      try { sources.push(decodeURIComponent(new URL(s).pathname)) } catch { /* bad uri */ }
+    }
+  }
+  dragPaths = null
+  if (!sources.length) return
+
+  if (dest === 'trash://') {
+    if (internal) void liq.startOp({ kind: 'trash', sources })
+    return
+  }
+  if (dest.includes('://')) return
+
+  // Alt (or Ctrl+Shift) drops a shortcut, like Explorer
+  const kind: 'copy' | 'move' | 'symlink' = !internal ? 'copy'
+    : (mods.altKey || (mods.ctrlKey && mods.shiftKey)) ? 'symlink'
+      : mods.ctrlKey ? 'copy'
+        : mods.shiftKey ? 'move'
+          : defaultDragEffect(sources[0], dest)
+  let filtered = sources.filter(s => dest !== s && !dest.startsWith(s + '/'))
+  if (kind === 'move') filtered = filtered.filter(s => dirname(s) !== dest)
+  else if (!opts.intoFolder && !internal && kind === 'copy') filtered = filtered.filter(s => dirname(s) !== dest)
+  if (!filtered.length) return
+  // opt-in guard against the stray drag that silently moves a folder, plus
+  // safe mode's check for the drop that was clearly not intended
+  transferWithConfirm(kind, filtered, dest, app.settings.confirmDrop)
 }

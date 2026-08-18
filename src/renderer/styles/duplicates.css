@@ -287,3 +287,11 @@
   overflow-wrap: anywhere;
 }
 .dlg-duplicates .dup-note-line.err { color: var(--danger); }
+
+/* the live header while a scan is still finding groups */
+.dup-live {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  margin: 2px 0 6px;
+  min-height: 1.1em;
+}

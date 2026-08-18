@@ -31,11 +31,16 @@ import { pathToFileURL } from 'node:url'
 import { resolveIcon } from './icons'
 import { mimeForName } from '../fs/mime'
 import { getSettings } from '../state/settings'
-import { FOLDER_ICON_DIR } from './foldericons'
+import { FOLDER_ICON_DIR, customFolderIcon } from './foldericons'
+import { composeFolderThumb, scanForMedia, TILES } from './folderthumb'
 
 /** honours the View setting; a cached thumbnail is still served when off */
 function thumbnailsRemoteEnabled(): boolean {
   try { return getSettings().thumbnailsRemote !== false } catch { return true }
+}
+
+function folderPreviewsEnabled(): boolean {
+  try { return getSettings().folderPreviews !== false } catch { return true }
 }
 import { CH } from '../../shared/ipc'
 import { LIQFILE_HOST } from '../../shared/preview'
@@ -462,6 +467,84 @@ async function readValidThumb(file: string, uri: string, mtimeSec: number): Prom
   return buf
 }
 
+/**
+ * A folder's thumbnail: what is inside it, inlaid into a folder shape.
+ *
+ * Shares everything with the file path above — the same cache directory, the
+ * same Thumb::URI/Thumb::MTime validation, the same concurrency slot, the same
+ * inflight de-duplication and the same fail marker. Only the generation step
+ * differs, so a folder cannot become a second, separately-broken thumbnail
+ * system.
+ *
+ * The fail marker matters more here than anywhere else: most folders on a
+ * machine hold no pictures at all, and without it every listing would rescan
+ * every one of them. With it, a folder is looked at once and then left alone
+ * until its mtime changes.
+ */
+/** the biggest already-cached thumbnail for a file, or null if it has none */
+async function cachedThumbPath(file: string): Promise<string | null> {
+  const hash = crypto.createHash('md5').update(gioEncodeFileUri(file), 'utf8').digest('hex')
+  for (let i = SIZE_ORDER.length - 1; i >= 0; i--) {
+    const p = path.join(cacheRoot(), 'thumbnails', SIZE_ORDER[i], `${hash}.png`)
+    try { await fsp.stat(p); return p } catch { /* next size down */ }
+  }
+  return null
+}
+
+async function generateFolderThumb(dir: string, uri: string, hash: string, size: ThumbSize, mtimeSec: number): Promise<Buffer | null> {
+  const existing = inflight.get(hash)
+  if (existing) return existing
+  const p = (async (): Promise<Buffer | null> => {
+    const failDir = path.join(cacheRoot(), 'thumbnails', 'fail', 'liqexplorer')
+    const fail = async (): Promise<null> => {
+      negCache.set(hash, mtimeSec)
+      if (negCache.size > 10_000) negCache.clear()
+      try {
+        await writeAtomic(path.join(failDir, `${hash}.png`),
+          makeMarkerPng({ 'Thumb::URI': uri, 'Thumb::MTime': String(mtimeSec) }))
+      } catch { /* marker is best-effort */ }
+      return null
+    }
+    await acquireSlot()
+    try {
+      const { images, videos } = await scanForMedia(dir)
+      // Prefer the cached thumbnail of each picture over the picture itself.
+      // This is what makes a browsed folder nearly free: the thumbnails were
+      // made on the way past, they are already small, and ImageMagick then
+      // reads four 256px PNGs instead of four 40-megapixel raws.
+      const files: string[] = []
+      for (const f of images) {
+        if (files.length >= TILES) break
+        files.push(await cachedThumbPath(f) ?? f)
+      }
+      for (const f of videos) {
+        if (files.length >= TILES) break
+        // a video contributes ONLY if it is already thumbnailed; spawning a
+        // video thumbnailer to illustrate a folder is not worth the wait
+        const c = await cachedThumbPath(f)
+        if (c) files.push(c)
+      }
+      if (!files.length) return fail()
+      const outDir = path.join(cacheRoot(), 'thumbnails', size)
+      await fsp.mkdir(outDir, { recursive: true, mode: 0o700 })
+      const rawOut = path.join(outDir, `${hash}.raw-${process.pid}-${tmpCounter++}.png`)
+      const ok = await composeFolderThumb(files, SIZE_PX[size], rawOut)
+      let raw: Buffer | null = null
+      if (ok) { try { raw = await fsp.readFile(rawOut) } catch { raw = null } }
+      try { await fsp.unlink(rawOut) } catch { /* may not exist */ }
+      if (!raw) return fail()
+      const withText = pngSetText(raw, { 'Thumb::URI': uri, 'Thumb::MTime': String(mtimeSec) })
+      if (!withText) return fail()
+      try { await writeAtomic(path.join(outDir, `${hash}.png`), withText) } catch { /* still serve */ }
+      return withText
+    } finally {
+      releaseSlot()
+    }
+  })()
+  inflight.set(hash, p)
+  try { return await p } finally { inflight.delete(hash) }
+}
+
 async function generateThumb(filePath: string, uri: string, hash: string, size: ThumbSize, mtimeSec: number): Promise<Buffer | null> {
   const existing = inflight.get(hash)
   if (existing) return existing
@@ -513,7 +596,16 @@ async function handleThumb(reqUrl: string): Promise<Response> {
 
   let st: fs.Stats
   try { st = await fsp.stat(filePath) } catch { return new Response('', { status: 404 }) }
-  if (st.isDirectory()) return new Response('', { status: 404 })
+  const isDir = st.isDirectory()
+  if (isDir) {
+    // three reasons a folder is served the plain icon instead, all of them the
+    // user's own decision rather than a limitation:
+    if (!folderPreviewsEnabled()) return new Response('', { status: 404 })
+    // an icon they chose by hand outranks anything generated
+    if (customFolderIcon(filePath)) return new Response('', { status: 404 })
+    // a remote folder means a dirent scan across the network per tile
+    if (isRemotePath(filePath) && !thumbnailsRemoteEnabled()) return new Response('', { status: 404 })
+  }
   const mtimeSec = Math.floor(st.mtimeMs / 1000)
   const uri = gioEncodeFileUri(filePath)
   const hash = crypto.createHash('md5').update(uri, 'utf8').digest('hex')
@@ -537,6 +629,11 @@ async function handleThumb(reqUrl: string): Promise<Response> {
   const failFile = path.join(cacheRoot(), 'thumbnails', 'fail', 'liqexplorer', `${hash}.png`)
   const marker = await readValidThumb(failFile, uri, mtimeSec)
   if (marker) { negCache.set(hash, mtimeSec); return new Response('', { status: 404 }) }
+
+  if (isDir) {
+    const buf = await generateFolderThumb(filePath, uri, hash, size, mtimeSec)
+    return buf ? serve(buf) : new Response('', { status: 404 })
+  }
 
   // 3. generation policy: skip large remote files
   if (isRemotePath(filePath)) {

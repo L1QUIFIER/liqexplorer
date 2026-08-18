@@ -8,6 +8,7 @@
 // so Exec field codes, Terminal=true and startup notification are GIO's
 // problem, not ours.
 
+import { shell } from 'electron'
 import { execFile, spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
@@ -317,6 +318,36 @@ export async function openWith(p: string | string[], appId: string): Promise<voi
   if (!paths.length) throw new Error('Nothing to open.')
   // gio launch handles %u/%f substitution, Terminal=true and D-Bus activation
   spawn('gio', ['launch', app.file, ...paths], { detached: true, stdio: 'ignore' }).unref()
+}
+
+/**
+ * Launch a browser (or any app) with a URL rather than a file.
+ *
+ * `openWith` above cannot do this: it filters its arguments to paths beginning
+ * with '/', which is right for files and drops a URL on the floor silently.
+ *
+ * The scheme is checked here rather than trusted, and only http/https pass. A
+ * desktop entry will happily be handed `file:///…` or any other scheme, and the
+ * caller of this is a menu whose engine list comes from the renderer — so the
+ * one place that turns a string into something the desktop launches is also the
+ * place that refuses everything except a web address.
+ */
+export async function openUrlWith(url: string, appId?: string): Promise<void> {
+  let u: URL
+  try { u = new URL(String(url)) } catch { throw new Error('That is not a web address.') }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only web addresses can be opened.')
+  if (!appId) { await shell.openExternal(u.toString()); return }
+  const d = loadDb()
+  const app = d.apps.get(appId)
+  // an app that has been uninstalled since it was chosen must not become a
+  // dead end: fall back to whatever the desktop considers the default
+  if (!app) { await shell.openExternal(u.toString()); return }
+  spawn('gio', ['launch', app.file, u.toString()], { detached: true, stdio: 'ignore' }).unref()
+}
+
+/** Apps registered as handling https, i.e. the browsers on this machine. */
+export function listBrowsers(): Promise<AppCandidate[]> {
+  return listAppsFor('x-scheme-handler/https')
 }
 
 export async function setDefaultApp(mime: string, appId: string): Promise<void> {

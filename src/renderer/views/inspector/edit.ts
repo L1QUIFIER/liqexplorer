@@ -90,6 +90,8 @@ export function createEditPage(): InspectorPage {
     cropEl.style.top = `${r.top - s.top + box.y * r.height}px`
     cropEl.style.width = `${box.w * r.width}px`
     cropEl.style.height = `${box.h * r.height}px`
+    // a full-size box draws rather than moves, so it must not offer the move cursor
+    cropEl.classList.toggle('is-full', box.w > 0.999 && box.h > 0.999)
     const pw = Math.round(box.w * img.naturalWidth)
     const ph = Math.round(box.h * img.naturalHeight)
     status.textContent = `${pw} × ${ph} px`
@@ -143,6 +145,9 @@ export function createEditPage(): InspectorPage {
     const oy = e.clientY
 
     const move = (ev: PointerEvent): void => {
+      // A release delivered outside the window never reaches us, and the crop
+      // box would then follow the bare cursor for the rest of the session.
+      if (!ev.buttons) { up(); return }
       const dx = (ev.clientX - ox) / r.width
       const dy = (ev.clientY - oy) / r.height
       let next: Box
@@ -163,23 +168,38 @@ export function createEditPage(): InspectorPage {
     const up = (): void => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   cropEl.addEventListener('pointerdown', (e) => {
     const h = (e.target as HTMLElement).dataset.dir
-    startBoxDrag(e, h ?? null)
+    if (h) { startBoxDrag(e, h); return }
+    // A press on the body of the box normally MOVES it — but the box starts out
+    // covering the whole picture, and a whole-picture box has nowhere to move
+    // to: clampBox pins it and the drag does nothing at all. That is the state
+    // the editor opens in, so the first and most natural gesture anyone makes —
+    // drag a rectangle over the part you want to keep — silently did nothing,
+    // and the only way to crop was to discover the corner handles. It also made
+    // the draw-a-fresh-box handler below unreachable, because with the box at
+    // full size there is no "outside the box" left to press on.
+    if (box.w > 0.999 && box.h > 0.999) { startDrawBox(e); return }
+    startBoxDrag(e, null)
   })
   // dragging on the image outside the box draws a fresh one
-  img.addEventListener('pointerdown', (e) => {
+  img.addEventListener('pointerdown', (e) => startDrawBox(e))
+
+  function startDrawBox(e: PointerEvent): void {
     const r = imgRect()
     if (!r || e.button !== 0) return
     e.preventDefault()
     const ox = (e.clientX - r.left) / r.width
     const oy = (e.clientY - r.top) / r.height
     const move = (ev: PointerEvent): void => {
+      if (!ev.buttons) { up(); return }
       const cx = (ev.clientX - r.left) / r.width
       const cy = (ev.clientY - r.top) / r.height
       box = withAspect({
@@ -192,10 +212,12 @@ export function createEditPage(): InspectorPage {
     const up = (): void => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
-  })
+    window.addEventListener('pointercancel', up)
+  }
 
   // ---- controls ----
 
@@ -252,9 +274,9 @@ export function createEditPage(): InspectorPage {
 
     const saveRow = el('div', 'ed-row ed-save')
     button(saveRow, 'Reset', 'Discard these changes', () => { reset(); paintCrop(); buildControls() })
-    const copyBtn = button(saveRow, 'Save a copy', 'Write a new file beside the original', () => void save({ mode: 'copy' }))
+    const copyBtn = button(saveRow, 'Save a copy', 'Save as a new file next to the original', () => void save({ mode: 'copy' }))
     copyBtn.classList.add('primary')
-    button(saveRow, 'Replace…', 'Replace the original (it goes to the Recycle Bin first)', () => {
+    button(saveRow, 'Replace…', 'Replace the original (moved to the Recycle Bin first)', () => {
       app.emit('show-confirm', {
         title: 'Replace the original?',
         message: `"${entry?.name}" will be replaced. The original goes to the Recycle Bin, so this can be undone.`,

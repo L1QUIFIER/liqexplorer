@@ -1,0 +1,122 @@
+/* Repeated pictures — a visual answer to a visual question.
+   The old version rendered names and byte counts through the generic report shell, which asks you
+   to decide which picture to delete without showing you either picture. */
+
+.dlg-similar { max-height: 90vh; }
+
+.sim-status {
+  padding: 6px 16px 0;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.sim-status.bad { color: var(--danger); }
+
+/* the whole point of the bar is that the work is no longer invisible */
+.sim-bar {
+  height: 4px;
+  margin: 8px 16px 0;
+  border-radius: 2px;
+  background: var(--bg-press);
+  overflow: hidden;
+}
+.sim-bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width var(--dur-fast, 120ms) linear;
+}
+/* the listing phase has no total to divide by, so it sweeps instead of lying about a percentage */
+.sim-bar.indeterminate .sim-bar-fill {
+  width: 30%;
+  animation: sim-sweep 1.1s ease-in-out infinite;
+}
+@keyframes sim-sweep {
+  0% { margin-left: -30%; }
+  100% { margin-left: 100%; }
+}
+
+.sim-body { display: flex; flex-direction: column; gap: 18px; }
+.sim-empty {
+  padding: 24px 4px;
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+.sim-group {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--bg-layer);
+}
+.sim-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.sim-group-title { font-weight: 600; }
+.sim-group-sub { font-size: var(--fs-small); color: var(--text-secondary); }
+
+.sim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+
+.sim-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: var(--bg-base, transparent);
+  min-width: 0;
+}
+.sim-tile:hover { background: var(--bg-hover); }
+/* the keeper is marked in the layout, not just in words — it is the one you are NOT deleting */
+.sim-tile.keeper { border-color: var(--accent); }
+.sim-tile.ticked { border-color: var(--danger); background: var(--bg-hover); }
+.sim-tile.gone { opacity: 0.35; }
+.sim-tile.gone .sim-thumb { filter: grayscale(1); }
+
+.sim-check {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 18px;
+  height: 18px;
+  z-index: 2;
+}
+
+.sim-thumb {
+  width: 100%;
+  height: 150px;
+  object-fit: contain;
+  border-radius: var(--radius);
+  background: var(--bg-press);
+}
+
+.sim-name {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sim-dim { font-size: var(--fs-small); color: var(--text-secondary); }
+.sim-tag { font-size: 11px; color: var(--text-secondary); }
+.sim-tile.keeper .sim-tag { color: var(--accent-text, var(--accent)); font-weight: 600; }
+
+.sim-show {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 0;
+  height: auto;
+}
+
+/* ticking the keeper is allowed, but the button says so rather than letting it pass quietly */
+.btn.warn { outline: 2px solid var(--warn-text, #d9a441); outline-offset: 1px; }

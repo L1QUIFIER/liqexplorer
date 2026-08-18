@@ -54,7 +54,7 @@ import { CH } from '../../shared/ipc'
 import {
   DEFAULT_DUP_PREFS, DUP_HEAD_BYTES, DUP_PUSH, byNewest,
   type DupFile, type DupGroup, type DupPrefs, type DupProgress,
-  type DupScanRequest, type DupScanResult,
+  type DupAttachReply, type DupScanRequest, type DupScanResult, type DupScanSummary,
 } from '../../shared/duplicates'
 import { isRemotePath } from '../fs/list'
 import { stateDir } from '../state/settings'
@@ -82,6 +82,8 @@ const MAX_FILES = 400_000
 const MAX_GROUPS = 5_000
 /** failures kept for the dialog's footnotes */
 const MAX_ERRORS = 50
+/** how long a finished scan stays collectable after the dialog closed */
+const FINISHED_TTL_MS = 10 * 60_000
 /** never descend into these, whatever the roots say */
 const SKIP_DIRS = new Set(['/proc', '/sys', '/dev', '/run', '/var/run', '/var/lock', '/lost+found'])
 
@@ -105,7 +107,6 @@ const full = (c: Cand): string => (c.dir === '/' ? '/' + c.name : c.dir + '/' + 
 interface Job {
   id: number
   cancelled: boolean
-  wc: WebContents
   roots: string[]
   subfolders: boolean
   minSize: number
@@ -118,6 +119,15 @@ interface Job {
   hardLinks: number
   truncated: boolean
   timer: NodeJS.Timeout | null
+  /** every group confirmed so far, in arrival order — replayed on attach */
+  found: DupGroup[]
+  /** confirmed but not yet pushed; drained by the push timer */
+  pending: DupGroup[]
+  /** monotonic, so a group id is unique across the whole scan */
+  seq: number
+  /** the window that started it; a detached scan keeps running with none */
+  wc: WebContents | null
+  detached: boolean
 }
 
 let nextScan = 1
@@ -207,9 +217,120 @@ function note(job: Job, p: string, error: string): void {
   if (job.errors.length < MAX_ERRORS) job.errors.push({ path: p, error })
 }
 
+/**
+ * Send progress, draining any groups confirmed since the last push.
+ *
+ * Batched on the existing timer rather than sent per group: a bucket of a
+ * thousand small duplicates would otherwise be a thousand IPC messages, and the
+ * renderer would spend the scan laying out rows instead of showing them.
+ *
+ * A DETACHED scan has no window to talk to. It keeps running and keeps
+ * accumulating into `found`, so whoever attaches next gets the lot.
+ */
 function push(job: Job, extra?: Partial<DupProgress>): void {
-  if (job.wc.isDestroyed()) return
-  job.wc.send(DUP_PUSH, { ...job.prog, ...extra })
+  const batch = job.pending.length ? job.pending.splice(0, job.pending.length) : undefined
+  const wc = job.wc
+  if (!wc || wc.isDestroyed()) return
+  wc.send(DUP_PUSH, { ...job.prog, ...(batch ? { groups: batch } : {}), ...extra })
+}
+
+/** Record confirmed groups: kept for replay, queued for the next push. */
+function emit(job: Job, sets: Cand[][]): void {
+  for (const g of sets) {
+    if (job.found.length >= MAX_GROUPS) {
+      if (!job.truncated) { job.truncated = true; job.prog.truncated = true }
+      return
+    }
+    const size = g[0].size
+    const files: DupFile[] = g
+      .map(c => ({ path: full(c), size: c.size, mtime: c.mtime }))
+      .sort(byNewest)
+    const group: DupGroup = {
+      id: `${size}-${job.seq++}`,
+      size,
+      wasted: size * (g.length - 1),
+      files,
+    }
+    job.found.push(group)
+    job.pending.push(group)
+    job.prog.foundGroups = job.found.length
+    job.prog.foundWasted += group.wasted
+  }
+}
+
+// ---------------------------------------------------------------- hash cache
+//
+// Re-running a scan after deleting a few duplicates used to cost the same as
+// the first run. Almost nothing has changed between the two, and a hash of the
+// same bytes is the same hash, so the expensive part is entirely reusable.
+//
+// The key is dev+ino+size+mtime. `dev` is not optional: inode numbers are only
+// unique WITHIN a filesystem, and this app is pointed at a CIFS mount and local
+// disks at the same time, so ino alone would collide across them. Size and
+// mtime are what make a stale entry impossible to trust — either changing
+// discards the entry rather than returning a hash for bytes that are gone.
+//
+// Kept in memory and flushed to disk, because the win is mostly WITHIN a
+// session (scan, delete, scan again) and a file write per hash would cost more
+// than it saves.
+
+interface CacheEntry { head?: string; tail?: string }
+
+const hashCache = new Map<string, CacheEntry>()
+let cacheDirty = false
+let cacheLoaded = false
+
+const cachePath = (): string => path.join(stateDir(), 'duphashes.json')
+
+/** cap: this is a convenience, not a database — it must not grow without end */
+const CACHE_MAX = 200_000
+
+function cacheKey(c: Cand): string {
+  return `${c.dev}:${c.ino}:${c.size}:${Math.floor(c.mtime)}`
+}
+
+function loadHashCache(): void {
+  if (cacheLoaded) return
+  cacheLoaded = true
+  try {
+    const raw = JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as Record<string, CacheEntry>
+    for (const [k, v] of Object.entries(raw)) {
+      if (hashCache.size >= CACHE_MAX) break
+      if (v && (typeof v.head === 'string' || typeof v.tail === 'string')) hashCache.set(k, v)
+    }
+  } catch { /* first run, or unreadable — an empty cache is always correct */ }
+}
+
+async function saveHashCache(): Promise<void> {
+  if (!cacheDirty) return
+  cacheDirty = false
+  try {
+    // youngest entries win if we are over the cap: a scan just ran, so what it
+    // touched is what the next one is most likely to touch
+    const entries = [...hashCache.entries()].slice(-CACHE_MAX)
+    await fsp.mkdir(stateDir(), { recursive: true }).catch(() => {})
+    const tmp = cachePath() + '.tmp'
+    await fsp.writeFile(tmp, JSON.stringify(Object.fromEntries(entries)))
+    await fsp.rename(tmp, cachePath())
+  } catch { /* a cache that cannot be written is still a working scanner */ }
+}
+
+/** hashRange, but answered from the cache when the file has not changed */
+async function cachedHash(
+  c: Cand, which: 'head' | 'tail', p: string, start: number, end: number | undefined,
+  stop: () => boolean,
+): Promise<HashOut> {
+  const key = cacheKey(c)
+  const hit = hashCache.get(key)?.[which]
+  if (hit) return { digest: hit, bytes: 0 }
+  const r = await hashRange(p, start, end, stop)
+  if (r.digest) {
+    const e = hashCache.get(key) ?? {}
+    e[which] = r.digest
+    hashCache.set(key, e)
+    cacheDirty = true
+  }
+  return r
 }
 
 // ---------------------------------------------------------------- hashing
@@ -340,6 +461,7 @@ async function walkRoot(job: Job, root: string, out: Cand[]): Promise<void> {
 // ---------------------------------------------------------------- the scan
 
 async function runScan(job: Job): Promise<DupScanResult> {
+  loadHashCache()
   const files: Cand[] = []
 
   // ---- stage 1a: walk ----
@@ -384,32 +506,47 @@ async function runScan(job: Job): Promise<DupScanResult> {
   files.length = 0
   job.prog.candidates = live.reduce((n, g) => n + g.length, 0)
 
-  // ---- stage 2: head sample ----
-  // A file at or below DUP_HEAD_BYTES is COMPLETELY covered by this read, so it
-  // is already content-verified and skips stage 3.
+  // ---- stages 2 and 3, ONE BUCKET AT A TIME ----
+  //
+  // These used to run across the whole tree: head-hash every candidate, then
+  // tail-hash every survivor, then report. Correct, but it meant no group could
+  // be final until the last byte of the last file was read, so the dialog had
+  // nothing to show for minutes.
+  //
+  // Taking one size bucket end to end instead — head, then tail within that
+  // bucket, then emit — makes every group final the moment it is produced. No
+  // provisional rows that later vanish, which would be worse than waiting.
+  //
+  // BIGGEST FILES FIRST, because the whole point is usually reclaiming space:
+  // the largest wins land in the first seconds, and arrival order comes out
+  // close to "most wasted first" without anything having to re-sort under the
+  // user's pointer.
+  live.sort((a, b) => b[0].size - a[0].size)
+
   job.prog.stage = 'head'
   job.prog.stageDone = 0
   job.prog.stageTotal = job.prog.candidates
-  const verified: Cand[][] = []
-  const needTail: Cand[][] = []
   const stop = (): boolean => job.cancelled
   let sinceTick = 0
 
   for (const group of live) {
     if (job.cancelled) break
     const size = group[0].size
+
     if (size === 0) {
       // only reachable with minSize 0: every empty file has identical content,
       // and there is nothing to read to prove it
       job.prog.stageDone += group.length
-      verified.push(group)
+      emit(job, [group])
       continue
     }
+
+    // -- head --
     const byHead = new Map<string, Cand[]>()
     await pool(group, job.remote ? HASH_POOL_REMOTE : HASH_POOL, async (c) => {
       const p = full(c)
       job.prog.current = p
-      const r = await hashRange(p, 0, Math.min(size, DUP_HEAD_BYTES) - 1, stop)
+      const r = await cachedHash(c, 'head', p, 0, Math.min(size, DUP_HEAD_BYTES) - 1, stop)
       job.prog.stageDone++
       job.prog.bytesHashed += r.bytes
       if (++sinceTick >= FILES_PER_TICK) { sinceTick = 0; await tick() }
@@ -422,60 +559,50 @@ async function runScan(job: Job): Promise<DupScanResult> {
       else byHead.set(r.digest, [c])
     }, stop)
     if (job.cancelled) break
+
+    // a file at or below DUP_HEAD_BYTES was COMPLETELY covered by that read, so
+    // it is already content-verified and never reaches the tail stage
+    const tailNeeded: Cand[][] = []
     for (const sub of byHead.values()) {
       if (sub.length < 2) continue
-      if (size <= DUP_HEAD_BYTES) verified.push(sub)
-      else needTail.push(sub)
+      if (size <= DUP_HEAD_BYTES) emit(job, [sub])
+      else tailNeeded.push(sub)
     }
+    if (!tailNeeded.length) continue
+
+    // -- tail: the head already matches, so byte DUP_HEAD_BYTES onwards decides
+    job.prog.stage = 'full'
+    for (const sub of tailNeeded) {
+      if (job.cancelled) break
+      const byTail = new Map<string, Cand[]>()
+      await pool(sub, job.remote ? HASH_POOL_REMOTE : HASH_POOL, async (c) => {
+        const p = full(c)
+        job.prog.current = p
+        const r = await cachedHash(c, 'tail', p, DUP_HEAD_BYTES, undefined, stop)
+        job.prog.bytesHashed += r.bytes
+        if (++sinceTick >= FILES_PER_TICK) { sinceTick = 0; await tick() }
+        if (!r.digest) {
+          if (r.error !== 'cancelled') note(job, p, r.error ?? 'could not be read')
+          return
+        }
+        const l = byTail.get(r.digest)
+        if (l) l.push(c)
+        else byTail.set(r.digest, [c])
+      }, stop)
+      if (job.cancelled) break
+      emit(job, [...byTail.values()].filter(x => x.length >= 2))
+    }
+    job.prog.stage = 'head'
   }
   live = []
 
-  // ---- stage 3: the rest of the bytes ----
-  // The head already matches inside each group, so hashing byte DUP_HEAD_BYTES
-  // onwards is enough to decide — nothing is read twice.
-  job.prog.stage = 'full'
-  job.prog.stageDone = 0
-  job.prog.stageTotal = needTail.reduce((n, g) => n + g.length, 0)
-  for (const group of needTail) {
-    if (job.cancelled) break
-    const byTail = new Map<string, Cand[]>()
-    await pool(group, job.remote ? HASH_POOL_REMOTE : HASH_POOL, async (c) => {
-      const p = full(c)
-      job.prog.current = p
-      const r = await hashRange(p, DUP_HEAD_BYTES, undefined, stop)
-      job.prog.stageDone++
-      job.prog.bytesHashed += r.bytes
-      if (++sinceTick >= FILES_PER_TICK) { sinceTick = 0; await tick() }
-      if (!r.digest) {
-        if (r.error !== 'cancelled') note(job, p, r.error ?? 'could not be read')
-        return
-      }
-      const l = byTail.get(r.digest)
-      if (l) l.push(c)
-      else byTail.set(r.digest, [c])
-    }, stop)
-    if (job.cancelled) break
-    for (const sub of byTail.values()) if (sub.length >= 2) verified.push(sub)
-  }
-
-  // ---- results: biggest recoverable space first ----
-  const groups: DupGroup[] = verified.map((g, i) => {
-    const filesOut: DupFile[] = g
-      .map(c => ({ path: full(c), size: c.size, mtime: c.mtime }))
-      .sort(byNewest)
-    return {
-      id: `${g[0].size}-${i}`,
-      size: g[0].size,
-      wasted: g[0].size * (g.length - 1),
-      files: filesOut,
-    }
-  })
-  groups.sort((a, b) => b.wasted - a.wasted || b.size - a.size
+  // ---- result ----
+  // The groups were streamed as they were confirmed; this is the same list,
+  // sorted the way a FINISHED scan should be. The dialog keeps arrival order
+  // while a scan runs (rows must not move under a selection) and adopts this
+  // order when it completes.
+  const groups = [...job.found].sort((a, b) => b.wasted - a.wasted || b.size - a.size
     || (a.files[0].path < b.files[0].path ? -1 : 1))
-  if (groups.length > MAX_GROUPS) {
-    groups.length = MAX_GROUPS
-    job.truncated = true
-  }
 
   return {
     scanId: job.id,
@@ -514,18 +641,27 @@ export function startDupScan(wc: WebContents, req: DupScanRequest): number {
     prog: {
       scanId: id, stage: 'walking', dirsSeen: 0, filesSeen: 0, candidates: 0,
       stageDone: 0, stageTotal: 0, bytesHashed: 0, current: '', done: false,
+      foundGroups: 0, foundWasted: 0,
     },
     errors: [],
     unreadable: 0,
     hardLinks: 0,
     truncated: false,
     timer: null,
+    found: [],
+    pending: [],
+    seq: 0,
+    detached: false,
   }
   jobs.set(id, job)
   // ~4 pushes a second, and the window closing is itself a cancel — nobody is
   // left to read the answer, and on a share the reads cost real money
+  // A destroyed window DETACHES the scan; it no longer cancels it. Closing the
+  // dialog (or the whole window) used to throw away every byte hashed so far,
+  // which on a network share is minutes of work for a folder someone glanced
+  // at. The scan keeps going into `found`, and whoever attaches next gets it.
   job.timer = setInterval(() => {
-    if (job.wc.isDestroyed()) { job.cancelled = true; return }
+    if (job.wc?.isDestroyed()) detachDupScan(job.id)
     push(job)
   }, PUSH_MS)
 
@@ -550,9 +686,13 @@ export function startDupScan(wc: WebContents, req: DupScanRequest): number {
       })
     })
     .finally(() => {
+      void saveHashCache()
       if (job.timer) clearInterval(job.timer)
       job.timer = null
-      jobs.delete(id)
+      // A finished scan is kept for a while rather than dropped: someone who
+      // closed the dialog while it ran should be able to come back and collect
+      // the answer, which is the entire point of letting it outlive the dialog.
+      setTimeout(() => jobs.delete(id), FINISHED_TTL_MS).unref?.()
     })
 
   return id
@@ -563,11 +703,51 @@ export function cancelDupScan(id: number): void {
   if (job) job.cancelled = true
 }
 
+/** Stop sending to the window, but keep scanning. */
+export function detachDupScan(id: number): void {
+  const job = jobs.get(id)
+  if (!job) return
+  job.wc = null
+  job.detached = true
+}
+
+/**
+ * Re-attach a window to a scan and hand back everything found so far.
+ *
+ * Replaying `found` rather than only continuing live is what makes closing the
+ * dialog safe: reopening shows the whole picture, not just the groups that
+ * happen to arrive after you came back.
+ */
+export function attachDupScan(wc: WebContents, id: number): DupAttachReply {
+  const job = jobs.get(id)
+  if (!job) return { ok: false }
+  job.wc = wc
+  job.detached = false
+  return { ok: true, progress: { ...job.prog }, groups: [...job.found] }
+}
+
+/** Scans worth offering to re-open. */
+export function listDupScans(): DupScanSummary[] {
+  return [...jobs.values()].map(j => ({
+    scanId: j.id,
+    roots: j.roots,
+    stage: j.prog.stage,
+    done: j.prog.done,
+    foundGroups: j.found.length,
+    foundWasted: j.prog.foundWasted,
+    filesSeen: j.prog.filesSeen,
+    startedAt: j.startedAt,
+  }))
+}
+
 // ---------------------------------------------------------------- ipc
 
 // Self-registered like ops/quick.ts — main/ipc.ts stays untouched.
 ipcMain.handle(CH('startDupScan'), (e: IpcMainInvokeEvent, req: DupScanRequest) =>
   startDupScan(e.sender, req))
 ipcMain.handle(CH('cancelDupScan'), (_e, id: number) => { cancelDupScan(id) })
+ipcMain.handle(CH('detachDupScan'), (_e, id: number) => { detachDupScan(id) })
+ipcMain.handle(CH('attachDupScan'), (e: IpcMainInvokeEvent, id: number) => attachDupScan(e.sender, id))
+ipcMain.handle(CH('listDupScans'), () => listDupScans())
 ipcMain.handle(CH('getDupPrefs'), () => getDupPrefs())
 ipcMain.handle(CH('setDupPrefs'), (_e, patch: Partial<DupPrefs>) => setDupPrefs(patch))

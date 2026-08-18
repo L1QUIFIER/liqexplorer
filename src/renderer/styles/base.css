@@ -21,6 +21,36 @@ body {
 #menu-layer, #dialog-layer { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
 #menu-layer > *, #dialog-layer > * { pointer-events: auto; }
 #ops-flyout { position: fixed; right: 16px; bottom: 44px; z-index: 90; }
+
+/* Everything that floats ABOVE the title bar has to opt out of the drag region.
+ *
+ * `-webkit-app-region: drag` on #titlebar hands the top 40px to the window
+ * manager, and that is decided by CSS, NOT by paint order: an overlay with
+ * position:fixed and a higher z-index is drawn over the title bar but its
+ * clicks are still swallowed as "drag the window". They never reach the
+ * renderer at all, so nothing in the page can see it happening.
+ *
+ * Measured: the media panel remembers where it was left, and its stored
+ * position was {x:0, y:0} — putting its whole header row, pop-out/fullscreen/
+ * close included, inside that band. Every one of those buttons was dead, and
+ * the viewer looked frozen. The same trap is open to menus, dialogs, the peek
+ * popover and the drop-bin dock, all of which can be positioned at the top of
+ * the window, so they are carved out here together rather than one bug at a
+ * time.
+ *
+ * This is also invisible to CDP-driven tests: injected input enters at the
+ * renderer, below the level where the drag region is applied, so a synthetic
+ * click on a dead button succeeds. It only reproduces with real pointer input.
+ *
+ * The CHILDREN, never the layers. #menu-layer, #dialog-layer and #peek-layer
+ * are transparent inset:0 sheets covering the whole window; marking those
+ * no-drag carves the title bar out of its own drag region and the window can
+ * no longer be moved by it at all (measured — it stopped dead). Only the boxes
+ * actually painted over the title bar may opt out. */
+#menu-layer > *, #dialog-layer > *, #peek-layer > *,
+#ops-flyout, #db-dock, .mv-panel {
+  -webkit-app-region: no-drag;
+}
 img.icon { width: 16px; height: 16px; object-fit: contain; }
 
 button { font: inherit; color: inherit; background: none; border: none; cursor: default; }

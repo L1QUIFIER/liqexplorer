@@ -29,6 +29,9 @@ export const PUSH = {
   opPassword: 'liqpush:op-password',        // PasswordRequest
   folderIconsChanged: 'liqpush:folder-icons',   // { path }
   mediaCacheReady: 'liqpush:media-cache-ready', // { path, file } — file '' means the conversion failed
+  imageBatch: 'liqpush:image-batch',            // BatchProgress
+  imageBatchApply: 'liqpush:image-batch-apply', // BatchApplyProgress
+  similarProgress: 'liqpush:similar-progress',  // SimilarProgress
 } as const
 
 /** The API surface preload exposes as window.liq */

@@ -13,6 +13,10 @@ import { mountFolderIcon } from './foldericon'
 import { mountFixNames } from './fixnames'
 import { mountHistory } from './history'
 import { mountDuplicates } from './duplicates'
+import { mountBetterImage } from './betterimage'
+import { mountPdfExport } from './pdfexport'
+import { mountBetterBatch } from './betterbatch'
+import { mountSimilar } from './similar'
 
 export function mountDialogs(): void {
   mountOps()
@@ -27,6 +31,10 @@ export function mountDialogs(): void {
   mountFixNames()
   mountHistory()
   mountDuplicates()
+  mountBetterImage()
+  mountPdfExport()
+  mountBetterBatch()
+  mountSimilar()
 }
 
 // ---------------------------------------------------------------- modal stack

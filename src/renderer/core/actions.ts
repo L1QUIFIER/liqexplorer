@@ -7,6 +7,8 @@ import { openInMediaViewer } from '../media/overlay'
 import { viewKindFor } from '../media/render'
 import { archiveMemberPath } from '../views/items'
 import type { FileEntry } from '../../shared/types'
+import type { LnkTarget } from '../../shared/lnk'
+import { toast } from '../views/binstore'
 
 /** extract one member to the on-disk cache and open it with its default app */
 async function openArchiveMember(uri: string): Promise<void> {
@@ -74,6 +76,55 @@ async function viewArchiveMember(entry: FileEntry, rows: FileEntry[]): Promise<b
  * the file engine cannot touch, so those verbs are inert (Explorer greys them
  * for drives). trash:// is excluded: its own permanent delete is legitimate. */
 function noFileOps(tab: Tab): boolean { return tab.isVirtual && tab.path !== 'trash://' }
+
+/**
+ * Follow a Windows shortcut.
+ *
+ * A folder target navigates, a file target goes through the SAME open path as
+ * any other file — so a .lnk to a photo opens in the viewer and a .lnk to a
+ * document opens in its application, which is what "just like Windows" means.
+ * An unresolvable one says what it points at instead of failing silently: the
+ * target is usually on another machine, and that is information, not an error.
+ */
+async function followShortcut(entry: FileEntry, tab = app.activeTab): Promise<void> {
+  const r = await liq.invoke('resolveLnk', entry.path).catch(
+    (e: Error) => ({ ok: false, error: String(e?.message ?? e) } as LnkTarget)) as LnkTarget
+  if (!r.ok || !r.target) {
+    toast({
+      text: r.winTarget ? `That shortcut points to ${r.winTarget}` : (r.error ?? 'That shortcut could not be read.'),
+      sub: r.winTarget ? 'which this computer does not have. Options ▸ General can map a Windows drive to a folder here.' : undefined,
+      bad: true,
+    })
+    return
+  }
+  if (r.isDir) { await tab.navigate(r.target); return }
+  // reuse the ordinary file rules rather than reimplementing them
+  const st = await liq.statEntries([r.target]).catch(() => null) as (FileEntry | null)[] | null
+  const target = st?.[0]
+  // EMPTY rows, not tab.rows: the target almost always lives in a different
+  // folder from the shortcut, and playlistFor falls back to index 0 when it
+  // cannot find the entry in the list it was given — which opened whatever
+  // happened to be the first viewable file in the CURRENT folder instead of
+  // the file the shortcut named. An empty list means a playlist of one: the
+  // target itself.
+  if (target && openInMediaViewer(target, [])) return
+  await liq.openPath(r.target)
+}
+
+/**
+ * File-picker mode hooks `open` (see chrome/pickbar.ts).
+ *
+ * Activation is the one verb that has to mean something different in a dialog:
+ * double-clicking a JPEG in a file manager shows you the picture, and in an
+ * upload dialog it hands the picture to the browser. Navigating into a folder
+ * is identical in both, so the interceptor is consulted only AFTER that case.
+ * Returning true means "handled — do not launch anything".
+ */
+let openIntercept: ((tab: Tab) => boolean) | null = null
+
+export function setOpenIntercept(fn: ((tab: Tab) => boolean) | null): void {
+  openIntercept = fn
+}
 
 export const actions = {
   // --- clipboard ---
@@ -208,6 +259,7 @@ export const actions = {
     if (!sel.length) return
     const dirs = sel.filter(e => e.isDir)
     if (dirs.length === 1 && sel.length === 1) { tab.navigate(dirs[0].path); return }
+    if (openIntercept?.(tab)) return
     for (const d of dirs) app.newTab(d.path, true)
     for (const f of sel.filter(e => !e.isDir)) {
       // Explorer opens a zip as a folder; we do it for every readable format
@@ -221,6 +273,10 @@ export const actions = {
         await openArchiveMember(f.path)
         continue
       }
+      // A Windows shortcut is a POINTER, not a document: opening the .lnk
+      // itself would hand a binary blob to some application. Follow it the way
+      // Windows does — into the folder, or into whatever the target opens with.
+      if (f.ext === 'lnk') { await followShortcut(f, tab); continue }
       // pictures/video/audio/PDF/text open in the floating viewer (Options >
       // View); it declines folders, archives and anything switched off there,
       // and those fall through to the default app exactly as before
@@ -228,6 +284,11 @@ export const actions = {
       await liq.openPath(f.path)
     }
   },
+  /** follow a .lnk, or say plainly why it cannot be followed */
+  async followShortcut(entry: FileEntry, tab = app.activeTab): Promise<void> {
+    await followShortcut(entry, tab)
+  },
+
   async openTerminal(tab = app.activeTab): Promise<void> {
     if (!tab.isVirtual) await liq.openTerminalAt(tab.path)
   },

@@ -248,6 +248,8 @@ function startDockDrag(e: PointerEvent, handle: HTMLElement): void {
   const up = (): void => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
+    try { handle.releasePointerCapture?.(e.pointerId) } catch { /* already released */ }
     if (!armed) return
     dockDragging = false
     consumedClick = true
@@ -263,6 +265,11 @@ function startDockDrag(e: PointerEvent, handle: HTMLElement): void {
 
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+  // A drag that ends outside the window delivers no pointerup — the same hazard
+  // this file already documents for the tray's own dragover tracking. Without
+  // this the move handler stays on `window` and the dock follows the cursor for
+  // the rest of the session.
+  window.addEventListener('pointercancel', up)
 }
 
 // --------------------------------------------------------------------- tiles

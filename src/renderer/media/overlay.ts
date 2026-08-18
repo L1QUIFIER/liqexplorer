@@ -249,7 +249,18 @@ function restoreFromFullscreen(): void {
  */
 document.addEventListener('fullscreenchange', () => {
   if (!panel) return
-  if (document.fullscreenElement) return
+  if (document.fullscreenElement) {
+    // ENTERING. The stage only reaches its new size once the transition has
+    // finished, so the layout() inside setFullscreen ran against the old box
+    // and fit-zoom was computed for a panel that no longer existed — the
+    // picture stayed its old size inside a fullscreen window. Re-fit here,
+    // where the box is final. (The stage's ResizeObserver normally catches
+    // this too; it is suspended whenever the document is hidden or occluded,
+    // which is exactly the kind of state a fullscreen transition passes
+    // through, so this does not rely on it.)
+    viewer?.layout()
+    return
+  }
   fullscreen = false
   restoreFromFullscreen()
 })
@@ -266,14 +277,31 @@ export function closeMediaViewer(): void {
   fullscreen = false
 }
 
+/**
+ * Drag the panel by its header.
+ *
+ * THE END OF A DRAG IS NOT GUARANTEED. A release outside the window, the window
+ * losing focus, or the compositor taking the pointer all end the gesture
+ * without delivering `pointerup` — and this listened for nothing else, so the
+ * `pointermove` handler stayed on `window` for the rest of the session. After
+ * that every mouse movement dragged the panel: reach for the close button and
+ * the panel moves out from under the cursor, which is exactly what "the buttons
+ * are glitched, especially the close button" looks like.
+ *
+ * Three defences, the same set media/viewer.ts already uses for its scrubber:
+ * `pointercancel`, an explicit capture release, and a button-free move — any
+ * move with no button held means the drag is over whatever the events said.
+ */
 function startDrag(e: PointerEvent): void {
   if (!panel || fullscreen) return
   const g = currentGeometry()
   const dx = e.clientX - g.x
   const dy = e.clientY - g.y
-  panel.setPointerCapture(e.pointerId)
+  const id = e.pointerId
+  panel.setPointerCapture(id)
   panel.classList.add('is-dragging')
   const move = (ev: PointerEvent): void => {
+    if (!ev.buttons) { up(); return }
     const w = g.w
     const h = g.h
     applyGeometry({
@@ -284,12 +312,15 @@ function startDrag(e: PointerEvent): void {
   }
   const up = (): void => {
     panel?.classList.remove('is-dragging')
+    try { panel?.releasePointerCapture(id) } catch { /* already released */ }
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
     rememberGeometry()
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', up)
 }
 
 function startResize(e: PointerEvent, dir: string): void {
@@ -301,6 +332,8 @@ function startResize(e: PointerEvent, dir: string): void {
   const sy = e.clientY
   panel.classList.add('is-dragging')
   const move = (ev: PointerEvent): void => {
+    // a move with no button held means the release was missed (see startDrag)
+    if (!ev.buttons) { up(); return }
     let { x, y, w, h } = g
     const mx = ev.clientX - sx
     const my = ev.clientY - sy
@@ -321,6 +354,7 @@ function startResize(e: PointerEvent, dir: string): void {
     panel?.classList.remove('is-dragging')
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
     rememberGeometry()
   }
   window.addEventListener('pointermove', move)

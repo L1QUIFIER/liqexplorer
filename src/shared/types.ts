@@ -336,6 +336,29 @@ export interface AppSettings {
    *  mixed media filled in 1.8s — and this user's media lives on the share,
    *  so it ships on with a setting to turn it off. */
   thumbnailsRemote: boolean
+  /**
+   * Where the accent colour comes from.
+   *
+   * 'system' reads the desktop's own — the GTK theme's declared accent, KDE's
+   * kdeglobals, or GNOME's named accent — so the app matches the rest of the
+   * session on Mint, Arch, Fedora or anywhere else without being configured.
+   * 'app' keeps the built-in Windows-11 palette. 'custom' uses accentColor.
+   */
+  accentSource: 'system' | 'app' | 'custom'
+  /** '#rrggbb', used only when accentSource is 'custom' */
+  accentColor: string
+  /**
+   * Show a folder's contents on its tile instead of a plain folder icon.
+   *
+   * Ships on, because for the folders where it matters — a picture library —
+   * the contents are the folder's identity and the name often is not. The cost
+   * is bounded rather than absent: a folder with no pictures is looked at once
+   * and then negatively cached until its mtime changes, and a folder whose
+   * pictures are already thumbnailed costs one ImageMagick call.
+   *
+   * A folder icon the user chose by hand always wins over this.
+   */
+  folderPreviews: boolean
   // --- live (animated) previews in the icon/tile views ---
   /** 'hover' plays the tile under the pointer, 'always' plays every tile that
    *  is actually on screen. Nothing plays in details/list/small: those show a
@@ -362,6 +385,13 @@ export interface AppSettings {
   mediaViewerKinds: MediaViewerKind[]
   /** start playing video/audio as soon as the viewer opens */
   mediaViewerAutoplay: boolean
+  /**
+   * Windows path prefix -> Linux path, for following .lnk shortcuts whose
+   * target is named by drive letter. Longest prefix wins, so
+   * "C:\\Users\\me\\OneDrive" can be mapped more specifically than "C:\\".
+   * Relative and UNC targets need no configuration at all.
+   */
+  lnkMappings: Record<string, string>
   /** frosted translucent panel. backdrop-filter is the expensive part of the
    *  effect on a machine with no GPU acceleration, hence the switch. */
   mediaViewerTranslucent: boolean
@@ -371,6 +401,37 @@ export interface AppSettings {
   mediaViewerWheelNav: boolean
   /** flip the wheel direction */
   mediaViewerWheelInvert: boolean
+  /**
+   * Has the user agreed to look a picture up on the internet, and how.
+   *
+   * '' means never asked, and that is the shipping state: this app made no
+   * outbound connection of its own for anything the viewer does, so the first
+   * time one is offered it has to be a decision rather than a surprise.
+   *
+   * 'browser' hands the search to the default browser — nothing leaves
+   * LiqExplorer itself, and whatever privacy setup the browser already has
+   * applies unchanged. 'no' remembers a refusal so the offer stops appearing.
+   */
+  mediaSearchConsent: '' | 'browser' | 'no'
+  /** which reverse-image site the handoff opens; user-visible, no default bias */
+  mediaSearchEngine: string
+  /**
+   * Desktop-entry id of the browser searches are sent to. '' means "whatever
+   * this desktop considers the default", which is the shipping state — picking
+   * one for the user would be guessing at something they can see and change.
+   */
+  mediaSearchBrowser: string
+  /**
+   * Ask the search sites not to filter their results.
+   *
+   * On by default because of what the feature is for: this looks for a bigger
+   * copy of a picture the user already has, and a filtered result is a copy
+   * that was found and then hidden. Every site's own preferences page sets the
+   * same switch; these are its documented parameters, nothing more.
+   */
+  mediaSearchUnfiltered: boolean
+  /** Yandex front door. They are separate indexes, so this changes the answers. */
+  mediaSearchYandexDomain: string
   /** After streaming a video Chromium cannot decode, convert it properly in the
    *  background so seeking becomes instant (measured 58-97 ms against 368-409 ms
    *  on the live stream). Costs disk: the cache is capped at 20 GB and files
@@ -467,6 +528,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   historyEnabled: true,
   rememberPerFolder: true,
   thumbnailsRemote: true,
+  accentSource: 'system',
+  accentColor: '',
+  folderPreviews: true,
   // Hover-to-play rather than 'always': sweeping the pointer over a folder of
   // 200 clips must not put 200 decoders on a CIFS share. 10 concurrent players
   // is a practical concurrency cap (see views/livemedia.ts).
@@ -481,9 +545,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mediaViewer: true,
   mediaViewerKinds: ['image', 'video', 'audio', 'pdf', 'text'],
   mediaViewerAutoplay: true,
+  lnkMappings: {},
   mediaViewerTranslucent: true,
   mediaViewerWheelNav: true,
   mediaViewerWheelInvert: false,
+  mediaSearchConsent: '',
+  mediaSearchEngine: 'lens',
+  mediaSearchBrowser: '',
+  mediaSearchUnfiltered: true,
+  mediaSearchYandexDomain: 'yandex.com',
   mediaTranscodeCache: true,
   mediaSeekPreview: true,
   mediaResume: true,

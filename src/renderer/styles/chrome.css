@@ -568,3 +568,47 @@
   cursor: pointer;
 }
 .notice-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* A tab primed to spring open under a drag. It has to be visible enough that
+   you know the hold registered, without looking like the tab is already
+   active — the whole point is that it is about to become active. */
+.tb-tab.spring {
+  background: var(--bg-hover-strong);
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+/* a tab that is the current right-drag destination, same cue the nav pane and
+   the file list use for theirs */
+.tb-tab.drop-target { background: var(--bg-hover-strong); outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* Activity light: hidden unless something is actually happening, so it costs
+   nothing at rest. Sits at the right of the status bar, before the view
+   toggles. */
+.sb-activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  margin-right: 6px;
+  border-radius: 11px;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  cursor: default;
+  white-space: nowrap;
+}
+.sb-activity:hover { background: var(--bg-hover-strong); color: var(--text-primary); }
+.sb-activity.is-busy::before {
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: sb-pulse 1.4s ease-in-out infinite;
+}
+.sb-activity.is-warn {
+  color: var(--dlg-warn, #9d5d00);
+  background: var(--dlg-warn-bg, rgba(252, 225, 0, .12));
+}
+.sb-activity.is-warn::before { content: '⚠'; font-size: 11px; }
+@keyframes sb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }

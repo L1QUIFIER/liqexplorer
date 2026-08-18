@@ -1,0 +1,206 @@
+/* "Find a better version" — the side-by-side that decides whether a candidate is really better.
+   The two pictures are given equal room on purpose: the whole point of the dialog is that a person
+   can see the difference the engine cannot measure. */
+
+.dlg-better { max-height: 88vh; }
+
+.better-sub {
+  padding: 2px 16px 0;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+.better-sub:empty { display: none; }
+
+.better-body { display: flex; flex-direction: column; gap: 14px; }
+
+.better-empty,
+.better-status {
+  padding: 18px 4px;
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+}
+.better-status.bad { color: var(--danger); }
+
+/* -------------------------------------------------- the picture you started with */
+
+.better-current {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  background: var(--bg-layer);
+}
+.better-shot {
+  width: 132px;
+  height: 132px;
+  object-fit: contain;
+  flex: none;
+  border-radius: var(--radius);
+  background: var(--bg-press);
+}
+.better-facts { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.better-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.better-dim { font-size: var(--fs-small); color: var(--text-secondary); }
+.better-dim.bad { color: var(--danger); }
+.better-why { font-size: var(--fs-small); color: var(--text-secondary); }
+.better-why.good { color: var(--accent-text, var(--accent)); }
+
+/* ------------------------------------------------------------- the comparison */
+
+.better-found { display: flex; flex-direction: column; gap: 12px; }
+.better-head { font-weight: 600; }
+
+.better-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.better-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.better-side-label {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+/* A fixed box, so the two sides line up before the remote one arrives and the layout does not jump
+   when the data: URL lands — but sized in vh, because a flat 300px pushed the size captions past
+   the fold, and those numbers are what justify the replacement. */
+.better-shot.big {
+  width: 100%;
+  height: clamp(160px, 34vh, 320px);
+  object-fit: contain;
+  background: var(--bg-press);
+}
+
+.better-note {
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+/* ------------------------------------------------------- what was looked at */
+
+.better-tried { font-size: var(--fs-small); }
+.better-tried summary {
+  cursor: default;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+.better-tried-row {
+  display: grid;
+  grid-template-columns: 190px 84px 1fr;
+  gap: 8px;
+  padding: 3px 0;
+  align-items: baseline;
+  color: var(--text-secondary);
+}
+.better-tried-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.better-tried-verdict.better { color: var(--accent-text, var(--accent)); font-weight: 600; }
+.better-tried-verdict.placeholder,
+.better-tried-verdict.unreadable { color: var(--danger); }
+
+/* ------------------------------------------------------- batch: the plan table */
+
+.dlg-batch { max-height: 88vh; }
+
+.batch-status {
+  padding: 6px 16px 0;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.batch-status.bad { color: var(--danger); }
+
+.batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 220px;
+}
+
+.batch-row {
+  display: grid;
+  grid-template-columns: 24px 56px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+.batch-row:hover { background: var(--bg-hover); }
+/* a ticked row is one that is about to be written, so it is marked more strongly than a hover */
+.batch-row.chosen {
+  background: var(--bg-selected, var(--bg-hover));
+  border-color: var(--accent);
+}
+.batch-row.saved { opacity: 0.55; }
+/* rows with nothing to offer recede — the point of the table is the ones that do */
+.batch-row.state-nothing,
+.batch-row.state-error,
+.batch-row.state-stopped { opacity: 0.6; }
+.batch-row.state-looking { background: var(--bg-layer); }
+
+.batch-check { width: 16px; height: 16px; }
+.batch-check:disabled { opacity: 0.3; }
+
+.batch-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: var(--radius);
+  background: var(--bg-press);
+}
+
+.batch-mid { min-width: 0; }
+.batch-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-now { font-size: var(--fs-small); color: var(--text-secondary); }
+
+.batch-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+.batch-gain { font-weight: 600; color: var(--accent-text, var(--accent)); }
+.batch-cand { font-size: var(--fs-small); color: var(--text-secondary); }
+.batch-state { font-size: var(--fs-small); color: var(--text-secondary); }
+
+.batch-compare {
+  padding: 8px 8px 14px 90px;
+  border-bottom: 1px solid var(--divider);
+}
+
+/* A shape change is not a failure — dHash is blind to aspect ratio, so a differently cropped copy
+   passes the same-picture test legitimately. It is a "look at this one properly" marker. */
+.better-warn {
+  font-size: var(--fs-small);
+  color: var(--warn-text, #d9a441);
+}
+.batch-warn {
+  font-size: var(--fs-small);
+  color: var(--warn-text, #d9a441);
+}

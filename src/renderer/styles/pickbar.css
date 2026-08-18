@@ -1,0 +1,79 @@
+/* File-picker mode: the accept/cancel bar (chrome/pickbar.ts).
+   Sits below the status bar, in the Win11 Open dialog's order — name box,
+   filter dropdown, primary button, Cancel. Only ever visible in a window
+   launched with --pick, so none of this touches an ordinary window. */
+
+#pickbar[hidden] { display: none; }
+
+#pickbar.pk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  background: var(--bg-layer);
+  border-top: 1px solid var(--stroke);
+  font-size: var(--fs-body);
+  color: var(--text-primary);
+}
+
+.pk-label {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pk-name {
+  flex: 1 1 auto;
+  min-width: 0;                 /* or a long path pushes the buttons off-screen */
+  height: 30px;
+  padding: 0 10px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-content);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  outline: none;
+}
+.pk-name:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pk-name:read-only { color: var(--text-secondary); background: var(--bg-window); }
+
+.pk-filter {
+  flex: 0 1 auto;
+  max-width: 260px;
+  height: 30px;
+  padding: 0 6px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-content);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+}
+.pk-filter[hidden] { display: none; }
+
+.pk-btn {
+  flex: 0 0 auto;
+  min-width: 92px;
+  height: 30px;
+  padding: 0 14px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-content);
+  border: 1px solid var(--stroke-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.pk-btn:hover { background: var(--bg-hover); }
+.pk-btn:active { background: var(--bg-active); }
+
+.pk-primary {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+.pk-primary:hover { background: var(--accent-light); }
+.pk-primary:disabled {
+  color: var(--text-disabled);
+  background: var(--bg-active);
+  cursor: default;
+}

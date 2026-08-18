@@ -15,6 +15,8 @@ import { actions } from '../core/actions'
 import { askArchivePassword } from '../dialogs/password'
 import { extractWizard } from '../dialogs/extract'
 import type { NemoAction } from '../../shared/nemo'
+import type { LnkTarget } from '../../shared/lnk'
+import { toast } from '../views/binstore'
 // side-effect too: importing the floating media viewer is what mounts it
 import { openInMediaViewer } from '../media/overlay'
 import { isViewable } from '../media/render'
@@ -30,6 +32,31 @@ interface ItemCtx extends Pt { entries: FileEntry[] }
 interface NavCtx extends Pt { place?: Place; entry?: FileEntry; path?: string }
 interface TabCtx extends Pt { index: number }
 interface TemplateInfo { name: string; path: string; icons?: string[] }
+
+/**
+ * Jump to the folder holding a shortcut's target, with the target selected.
+ *
+ * Falls back to saying where it points when the target is not on this machine —
+ * the same honest answer following it gives, because "open its location" and
+ * "open it" fail for exactly the same reason.
+ */
+async function showLnkTarget(entry: FileEntry): Promise<void> {
+  const r = await liq.invoke('resolveLnk', entry.path).catch(
+    (e: Error) => ({ ok: false, error: String(e?.message ?? e) } as LnkTarget)) as LnkTarget
+  if (!r.ok || !r.target) {
+    toast({
+      text: r.winTarget ? `That shortcut points to ${r.winTarget}` : (r.error ?? 'That shortcut could not be read.'),
+      sub: 'which this computer does not have.',
+      bad: true,
+    })
+    return
+  }
+  const dir = r.isDir ? r.target : r.target.slice(0, r.target.lastIndexOf('/')) || '/'
+  const tab = app.activeTab
+  if (!tab) return
+  await tab.navigate(dir)
+  if (!r.isDir) tab.setSelection(new Set([r.target]))
+}
 
 export function mountMenus(): void {
   app.on('background-context', (d: Pt) => { void showBackgroundMenu(d) })
@@ -536,6 +563,12 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
         ? [{ label: 'View here', onClick: () => { openInMediaViewer(single, tab.rows, { force: true }) } }]
         : []),
       { label: 'Open with', submenu: openWithSubmenu(single, apps) },
+      // A shortcut has a second destination — the folder its target lives in.
+      // Windows calls this "Open file location" and it is the reason you can
+      // use a shortcut to FIND something rather than only to open it.
+      ...(single.ext === 'lnk'
+        ? [{ label: 'Open target folder', onClick: () => { void showLnkTarget(single) } }]
+        : []),
       { separator: true },
       fav
         ? { label: 'Remove from Favorites', onClick: () => app.emit('remove-from-favorites', [single.path]) }
@@ -554,12 +587,24 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
         },
         { label: 'Test archive', onClick: () => { void testArchive(single) } },
       ] : []),
+      // a PDF is the one common file type whose most-wanted conversion has no
+      // home anywhere else in the shell
+      ...(single.ext === 'pdf'
+        ? [{ label: 'Save as pictures…', onClick: () => app.emit('show-pdf-export', { path: single.path }) }]
+        : []),
       { label: 'Compress to ZIP file', disabled: noEdit, onClick: () => { void actions.compress(tab) } },
       { separator: true },
       ...(sendTo.length ? [{ label: 'Send to', submenu: sendTo }] : []),
       ...(nemo.length ? [{ label: 'Actions', submenu: nemo }] : []),
       { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath(tab) } },
       { separator: true },
+      // Also in the icon row at the top, which is where Explorer 11 puts it and
+      // nowhere else. That row is a row of unlabelled glyphs: people who know it
+      // use it, and everyone else concludes the menu has no Delete. A named
+      // entry costs one line and stops the most common destructive action being
+      // the hardest one to find.
+      { label: 'Delete', shortcut: 'Del', danger: true, disabled: noEdit,
+        onClick: () => deleteEntries(tab, entries) },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
     ]
   } else if (single) {
@@ -587,6 +632,9 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
       },
       { separator: true },
       { label: 'Open in Terminal', icon: 'utilities-terminal', onClick: () => { void liq.openTerminalAt(single.path) } },
+      { separator: true },
+      { label: 'Delete', shortcut: 'Del', danger: true, disabled: noEdit,
+        onClick: () => deleteEntries(tab, entries) },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
     ]
   } else {
@@ -645,6 +693,8 @@ async function showItemMenu(d: ItemCtx): Promise<void> {
       ...(nemo.length ? [{ label: 'Actions', submenu: nemo }] : []),
       { label: 'Copy as path', shortcut: 'Ctrl+Shift+C', onClick: () => { void actions.copyPath(tab) } },
       { separator: true },
+      { label: `Delete ${entries.length} items`, shortcut: 'Del', danger: true, disabled: noEdit,
+        onClick: () => deleteEntries(tab, entries) },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties(tab) } },
     ]
   }

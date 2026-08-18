@@ -1,7 +1,28 @@
 import { app, BrowserWindow, protocol } from 'electron'
+// FIRST, before any module registers an IPC handler: startHealth() wraps
+// ipcMain.handle to time every call, and a handler registered before the wrap
+// is a handler that is never measured.
+import { startHealth, setOpDescriber } from './state/health'
+startHealth()
 import * as path from 'node:path'
+
+/**
+ * Let media play without a click first.
+ *
+ * Chromium's autoplay policy is written for web pages, where a video that
+ * starts talking at you is hostile. This is a file manager: the user opened a
+ * clip in a viewer they asked for, and the gesture that did it (a double-click
+ * in the file list) has expired by the time the file has been read off a
+ * network share and decoded — so play() was refused and every single clip had
+ * to be started by hand, including each one you stepped onto.
+ *
+ * Set before app.whenReady(), which is the only point it is read.
+ */
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 import { createWindow, windowForPath } from './windows'
+import { parsePickArgs, openPicker } from './pick'   // also self-registers pickRequest/pickResult/pickExists
 import { registerIpc } from './ipc'
+import { getOps } from './ops/engine'
 import { registerProtocols, protocolPrivileges } from './platform/protocols'
 import { initTheme } from './platform/theme'
 import { loadSettings } from './state/settings'
@@ -19,14 +40,27 @@ import './platform/tracks'                   // self-registers mediaTracks / sub
 import './platform/contactsheet'             // self-registers contactSheet
 import './platform/nemoactions'              // self-registers nemoActions / runNemoAction
 import './fs/sniff'                          // self-registers identifyFile
+import './fs/lnk'                            // self-registers resolveLnk
 import './platform/tools'                    // self-registers toolReport
 import './platform/extstore'                 // self-registers the extension store
 import './platform/printing'                 // self-registers listPrinters / printFiles
+import './platform/diskusage'                // self-registers scanUsage / cancelUsage
+import './imagelab/replace'                  // self-registers imageInspect / imageFindBetter / imageSaveBetter
+import './imagelab/batch'                    // self-registers imageBatchScan / imageBatchCancel / imageBatchApply
+import './platform/mediahealth'              // self-registers mediaHealth
+import './platform/compare'                  // self-registers compareFolders
+import './platform/mediatools'               // self-registers mediaSaveFrame / mediaGifToVideo
+import './platform/accent'                   // self-registers systemAccent
+import { startAudioWatch, stopAudioWatch } from './platform/audiodev'
+import './platform/similar'                  // self-registers findSimilar
 import './ops/imageedit'   // self-registers applyEdit
 import './ops/dropbins'     // self-registers binsGet/binsSet/convertImages/checksumsRun
 import './platform/mediainfo' // self-registers fileFacts/fileFactsMany (Details tab)
 import './ops/textfile'     // self-registers textRead/textWrite (Doc tab)
 import './ops/pdfops'       // self-registers pdfDocInfo/pdfThumbs/pdfApplyPages/pdfMerge/pdfPick
+import './ops/pdfexport'    // self-registers pdfExportFormats/pdfExport/pdfExportCancel
+import './ops/verify'       // self-registers verifyChecksums
+import './ops/toolbox'      // self-registers the small tools
 
 // Paths handed on the command line (first launch or forwarded by second
 // instance). Relative paths are resolved against cwd — the SECOND instance's
@@ -107,11 +141,27 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', (_e, argv, workingDirectory) => {
+    // `--pick` is another application's file dialog arriving through the XDG
+    // portal (helpers/filechooser-portal.py). It is not a folder to browse, so
+    // it never goes through parseCli — that would open an ordinary window on
+    // the picker's start folder and leave the caller waiting forever.
+    const pick = parsePickArgs(argv)
+    if (pick) { openPicker(pick); return }
     const win = createWindow(parseCli(argv, workingDirectory))
     win.focus()
   })
 
   protocol.registerSchemesAsPrivileged(protocolPrivileges())
+
+  // let a stall record what the file engine was doing at the time — the single
+  // most useful fact when the window goes unresponsive mid-transfer
+  setOpDescriber(() => {
+    const active = getOps().filter(o => o.status !== 'done' && o.status !== 'cancelled')
+    if (!active.length) return ''
+    const a = active[0]
+    const queued = active.length > 1 ? ` (+${active.length - 1} queued)` : ''
+    return `${a.kind} ${a.status} ${a.itemsDone}/${a.itemsTotal}${queued} — ${a.currentFile || ''}`.trim()
+  })
 
   app.whenReady().then(async () => {
     await loadSettings()
@@ -121,7 +171,11 @@ if (!gotLock) {
     initClipboard()
     registerProtocols()
     registerIpc()
-    createWindow(parseCli(process.argv, process.cwd()))
+    const pick = parsePickArgs(process.argv)
+    if (pick) openPicker(pick)
+    else createWindow(parseCli(process.argv, process.cwd()))
+    // after a window exists, so the first announcement has somewhere to go
+    startAudioWatch()
   })
 
   app.on('window-all-closed', () => app.quit())
@@ -129,5 +183,5 @@ if (!gotLock) {
   app.on('before-quit', () => session.flushNow())
   // an ffmpeg spawned for playback is not a child that dies with us: without
   // this a quit mid-stream leaves it transcoding to a pipe nobody reads
-  app.on('before-quit', () => { stopAllTranscodes(); stopCaching() })
+  app.on('before-quit', () => { stopAllTranscodes(); stopCaching(); stopAudioWatch() })
 }

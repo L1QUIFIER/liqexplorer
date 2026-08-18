@@ -19,6 +19,7 @@ import { previewURL } from '../../shared/preview'
 import { createTriage, type TriageDeck, type TriageHooks } from './triage'
 import { createFilmstrip, type FilmstripHandle } from './filmstrip'
 import { createWall, type WallHandle } from './wall'
+import { attachAudioOutput, chosenOutput, listOutputs, useOutput } from './audioout'
 import { attachSubtitles, type SubtitleAttachment } from './subtitles'
 import { trackLabel, type MediaTracks } from '../../shared/tracks'
 
@@ -71,6 +72,41 @@ export interface ViewerOptions {
   triage?: TriageHooks
 }
 
+/**
+ * One entry in the viewer's menu.
+ *
+ * The descriptor is the shared thing: the More button and the right-click menu
+ * render the same list, and the pop-out window gets both for free because it is
+ * this same viewer. Anything that can be done to the item on screen is declared
+ * here once, so the two surfaces cannot disagree about what exists.
+ */
+export interface MvEntry {
+  label: string
+  /** right-aligned shortcut hint; '' for entries with no key */
+  key?: string
+  /** rendered as a toggle that is currently on */
+  on?: boolean
+  enabled: boolean
+  /** destructive, rendered in the danger colour */
+  danger?: boolean
+  separator?: boolean
+  submenu?: MvEntry[]
+  run?: () => void
+}
+
+/**
+ * The search sites, fetched once and cached.
+ *
+ * The list lives in main because that is where the URLs are built — the
+ * renderer names an engine and never supplies a URL, so a compromised renderer
+ * cannot hand the desktop an arbitrary one to open.
+ */
+let engineCache: { id: string; label: string; image: boolean; text: boolean }[] = []
+void (async () => {
+  engineCache = await window.liq?.invoke?.('mediaSearchEngines').catch(() => []) as
+    { id: string; label: string; image: boolean; text: boolean }[] ?? []
+})()
+
 export interface ViewerHandle {
   root: HTMLElement
   /** the drag handle the overlay hooks; also where its resize edges start */
@@ -90,7 +126,19 @@ export interface ViewerHandle {
 }
 
 const RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+/** how far "fit" may enlarge a small picture; see fitScale() */
+const MAX_FIT_UPSCALE = 8
+/**
+ * Arrow-key seek, matched to BulkMediaManager's player.
+ *
+ * Its `seek_step_s` is 5 and `seek_step_fast_s` is 30 (app/services/hotkeys.py),
+ * and its arrows are the OPPOSITE way round from what this viewer used to do:
+ * a bare arrow moves to the next FILE and a modifier seeks within the current
+ * one. Two players on the same machine disagreeing about what Left means is a
+ * worse problem than either mapping being wrong, so this one follows.
+ */
 const SEEK_STEP = 5
+const SEEK_STEP_FAST = 30
 const ZOOM_MIN = 0.05
 const ZOOM_MAX = 16
 const ZOOM_STEP = 1.25
@@ -156,6 +204,16 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   let rate = opts.start?.rate ?? 1
   let pendingTime = opts.start?.time ?? 0
   let pendingPlay = opts.start?.playing ?? !!opts.autoplay
+  /**
+   * Does the user want playback running?
+   *
+   * Carried ACROSS items, which is the point: stepping through a folder of
+   * clips used to load each one paused, so thumbing through meant pressing play
+   * every single time. Only an auto-advance set pendingPlay before; a manual
+   * next did not. This remembers the intent instead — press pause and the next
+   * clip stays paused, leave it playing and the folder plays through.
+   */
+  let wantPlay = pendingPlay
 
   // image zoom: scale 1 = one image pixel per CSS pixel; `fit` recomputes it
   // from the stage on every layout, which is what makes resizing feel right
@@ -209,6 +267,11 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   type ViewerMode = 'single' | 'theatre' | 'wall'
   let vmode: ViewerMode = 'single'
   let wall: WallHandle | null = null
+  /** the away-click listener of whichever menu is open, so it can be removed */
+  let menuAway: ((ev: MouseEvent) => void) | null = null
+  /** audio outputs, refreshed in the background so the menu can be built now */
+  let outputs: { id: string; label: string }[] = []
+  void listOutputs().then(o => { outputs = o })
   const errorBox = el('div', 'mv-error')
   errorBox.hidden = true
   // transient, and deliberately not an error: "this is being converted for you"
@@ -216,8 +279,8 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   const note = el('div', 'mv-note')
   note.hidden = true
   let noteTimer = 0
-  const prevBtn = iconBtn('mv-nav mv-prev', ICONS.prev, 'Previous (Shift+←)')
-  const nextBtn = iconBtn('mv-nav mv-next', ICONS.next, 'Next (Shift+→)')
+  const prevBtn = iconBtn('mv-nav mv-prev', ICONS.prev, 'Previous (←)')
+  const nextBtn = iconBtn('mv-nav mv-next', ICONS.next, 'Next (→)')
   // inside the stage on purpose: the deck sits on the bottom edge of the
   // PICTURE, above the transport bar and clear of the filename in the header
   const triage: TriageDeck | null = opts.triage
@@ -405,6 +468,9 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     seekInFlight = false
     kind = viewKindFor(item)
     root.dataset.kind = kind
+    // a clip stepped onto starts playing if playback was running when we left
+    // the last one (see wantPlay)
+    if (kind === 'video' || kind === 'audio') pendingPlay = pendingPlay || wantPlay
 
     handle = renderMedia(content, item, {
       maxHeight: opts.maxHeight,
@@ -770,6 +836,11 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   }
 
   function wireMedia(m: HTMLMediaElement): void {
+    // Follow the desktop's audio output. Chromium binds an element to a device
+    // when it starts and keeps it there, so plugging in headphones mid-film
+    // otherwise leaves the sound coming out of the speakers you walked away
+    // from while every other app has already moved.
+    attachAudioOutput(m, (text) => showNote(text))
     m.addEventListener('timeupdate', paintTransport)
     m.addEventListener('seeked', () => {
       window.clearTimeout(seekStuck)
@@ -797,7 +868,7 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     // and stops at the end rather than looping the folder for ever
     m.addEventListener('ended', () => {
       if (opts.autoAdvance === false) return
-      if (index < items.length - 1) { pendingPlay = true; show(index + 1) }
+      if (index < items.length - 1) { pendingPlay = true; wantPlay = true; show(index + 1) }
     })
   }
 
@@ -1067,11 +1138,9 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
    * Doubles as the key map: a shortcut nobody can discover is a shortcut nobody
    * uses, and this player had six of them hidden behind letters.
    */
-  function openMoreMenu(anchor: HTMLElement): void {
-    root.querySelector('.mv-moremenu')?.remove()
-    const menu = el('div', 'mv-moremenu')
+  function menuEntries(): MvEntry[] {
     const isMedia = kind === 'video' || kind === 'audio'
-    const entries: { label: string; key: string; on?: boolean; enabled: boolean; run: () => void }[] = [
+    const entries: MvEntry[] = [
       { label: 'Filmstrip', key: 'S', on: strip.isOn(), enabled: items.length > 1,
         run: () => { strip.toggle(); layout() } },
       { label: 'Rate and sort', key: 'T', on: !!triage?.isOn(), enabled: !!opts.triage,
@@ -1085,37 +1154,540 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
         run: () => setMode(vmode === 'theatre' ? 'single' : 'theatre') },
       { label: 'Wall', key: 'W', on: vmode === 'wall', enabled: items.length > 1,
         run: () => setMode(vmode === 'wall' ? 'single' : 'wall') },
-      { label: 'Bigger / smaller grid', key: 'G', enabled: vmode === 'wall', run: () => wall?.cycleGrid() },
-      { label: 'Open in another application', key: '', enabled: !!items[index],
+      { label: 'Grid size', key: 'G', enabled: vmode === 'wall', run: () => wall?.cycleGrid() },
+      { label: 'Open with…', key: '', enabled: !!items[index],
         run: () => { void window.liq?.openPath?.(items[index].path) } },
     ]
-    for (const e of entries) {
-      const b = el('button', 'mv-moreitem')
-      b.classList.toggle('is-on', !!e.on)
-      b.appendChild(el('span', '', e.label))
-      if (e.key) b.appendChild(el('kbd', '', e.key))
-      b.disabled = !e.enabled
-      if (e.enabled) b.addEventListener('click', () => { menu.remove(); e.run(); syncTools() })
-      menu.appendChild(b)
+    return entries.concat(itemEntries())
+  }
+
+  /**
+   * Render the descriptor, either under an anchor or at a point.
+   *
+   * ONE renderer for the More button and the right-click menu, because the
+   * popped-out window is this same viewer in a different frame: a second menu
+   * built separately for it would drift, and the two would disagree about what
+   * the viewer can do. That divergence is the bug, not the missing menu.
+   */
+  /**
+   * What can be done to the ITEM on screen, as opposed to the viewer itself.
+   *
+   * Split out because the two lists have different lifetimes: the viewer's own
+   * toggles are always the same, while these depend on what is showing. A gif
+   * is not a video and not a still, and it is the only one of the three where
+   * "convert this" is the most useful thing on the menu.
+   */
+  function itemEntries(): MvEntry[] {
+    const it = items[index]
+    const local = !!it?.path.startsWith('/')
+    const dir = local ? it.path.slice(0, it.path.lastIndexOf('/')) || '/' : ''
+    const isGif = it?.ext === 'gif'
+    const out: MvEntry[] = [{ label: '', enabled: false, separator: true }]
+
+    out.push(
+      { label: 'Copy as path', key: '', enabled: local,
+        run: () => { void window.liq?.copyTextToClipboard?.(it.path) } },
+      { label: 'Copy', key: '', enabled: local,
+        run: () => { void window.liq?.clipboardSet?.({ paths: [it.path], cut: false }) } },
+      // "Show in folder" is what every other file manager calls this, and it
+      // reveals the FILE — selected — rather than dropping you in the folder
+      { label: 'Show in folder', key: '', enabled: local,
+        run: () => { void window.liq?.invoke?.('revealPath', it.path) } },
+    )
+
+    if (isGif) {
+      out.push({ label: '', enabled: false, separator: true })
+      out.push({
+        label: 'Convert to video', key: '', enabled: local,
+        submenu: [
+          { label: 'MP4', enabled: true, run: () => void convertGif('mp4') },
+          { label: 'WebM', enabled: true, run: () => void convertGif('webm') },
+        ],
+      })
+    }
+    if (kind === 'video') {
+      out.push({ label: '', enabled: false, separator: true })
+      out.push({ label: 'Save frame as image…', key: '', enabled: local,
+        run: () => void saveFrame() })
+    }
+
+    // Looking it up. Images search by the picture; a video or a gif searches by
+    // the FRAME on screen, which is why this belongs to the viewer — it is the
+    // only place that knows which frame you meant. Both routes hand off to the
+    // browser, so neither makes a connection from this app.
+    const searchable = kind === 'image' || kind === 'video'
+    if (searchable && engineCache.length) {
+      // filtered by what each site can actually do: DuckDuckGo has no reverse
+      // image search, and listing it under one is offering something that does
+      // not exist
+      const byPicture: MvEntry[] = engineCache.filter(e => e.image).map(e => ({
+        label: e.label, enabled: true, run: () => void searchFor(e.id, e.label),
+      }))
+      const byName: MvEntry[] = engineCache.filter(e => e.text).map(e => ({
+        label: e.label, enabled: true, run: () => void searchName(e.id),
+      }))
+      out.push({ label: '', enabled: false, separator: true })
+      if (byPicture.length) {
+        out.push({
+          label: 'Find this image online',
+          key: '', enabled: local, submenu: byPicture,
+        })
+      }
+      if (byName.length) {
+        out.push({ label: 'Search the web', key: '', enabled: local, submenu: byName })
+      }
+    }
+
+    // Where the sound goes. Only for things that HAVE sound, and only when the
+    // machine has more than one place to send it — a single-output machine
+    // would just get a menu item that says "Default".
+    if ((kind === 'video' || kind === 'audio') && outputs.length > 1) {
+      const cur = chosenOutput()
+      out.push({ label: '', enabled: false, separator: true })
+      out.push({
+        label: 'Audio output', key: '', enabled: true,
+        submenu: [
+          {
+            label: 'System default', enabled: true, on: !cur,
+            run: () => { void useOutput('').then(l => showNote(`Sound follows the system default (${l})`)) },
+          },
+          ...outputs.filter(o => o.id !== 'default').map(o => ({
+            label: o.label, enabled: true, on: cur === o.id,
+            run: () => { void useOutput(o.id).then(l => showNote(`Sound going to ${l}`)) },
+          })),
+        ],
+      })
+    }
+
+    // Delete belongs on the menu, not only on a key. A destructive action that
+    // exists solely as a keyboard shortcut is invisible: nobody discovers it,
+    // and anyone who half-remembers it is guessing at a key that deletes files.
+    out.push({ label: '', enabled: false, separator: true })
+    out.push({ label: 'Delete', key: 'Del', enabled: local, danger: true,
+      run: () => deleteCurrent(false) })
+
+    out.push({ label: '', enabled: false, separator: true })
+    out.push({ label: 'Properties', key: '', enabled: local,
+      run: () => { void window.liq?.showProperties?.([it.path]) } })
+    return out
+  }
+
+  /**
+   * Ask once, before anything is ever looked up on the internet.
+   *
+   * Rendered INSIDE the viewer, not through the dialog layer, because the
+   * pop-out window has no dialog layer — it boots no app. A consent prompt that
+   * only worked in the docked panel would mean the pop-out either asked nothing
+   * or could not offer the feature at all.
+   *
+   * The wording says what actually happens rather than reassuring: the picture
+   * goes to the clipboard and the browser is opened. This app makes no
+   * connection of its own, and that is a fact worth stating plainly, because it
+   * is the reason this needs no proxy and no VPN setting.
+   */
+  function askToSearch(engineLabel: string): Promise<boolean> {
+    return new Promise(resolve => {
+      root.querySelector('.mv-consent')?.remove()
+      const box = el('div', 'mv-consent')
+      box.appendChild(el('h3', '', 'Look this up on the internet?'))
+      const p = el('div', 'mv-consent-body')
+      p.appendChild(el('p', '', `The picture will be copied to your clipboard and ${engineLabel} will open in your normal browser. Paste it there with Ctrl+V.`))
+      p.appendChild(el('p', 'mv-consent-note', 'LiqExplorer does not connect to anything itself — your browser makes the request, with whatever privacy setup it already has.'))
+      box.appendChild(p)
+      const row = el('div', 'mv-consent-row')
+      const no = el('button', 'mv-consent-btn', 'Not this time')
+      const yes = el('button', 'mv-consent-btn is-primary', 'Open my browser')
+      row.append(no, yes)
+      box.appendChild(row)
+      const done = (ok: boolean, remember: '' | 'browser' | 'no'): void => {
+        box.remove()
+        if (remember) void window.liq?.setSettings?.({ mediaSearchConsent: remember })
+        resolve(ok)
+      }
+      no.addEventListener('click', () => done(false, 'no'))
+      yes.addEventListener('click', () => done(true, 'browser'))
+      root.appendChild(box)
+      yes.focus()
+    })
+  }
+
+  interface SearchSettings {
+    mediaSearchConsent?: string
+    mediaSearchBrowser?: string
+    mediaSearchUnfiltered?: boolean
+    mediaSearchYandexDomain?: string
+  }
+
+  /**
+   * Which browser to send this to, asked once and then remembered.
+   *
+   * Chrome, Chromium and LiqBrowser are all registered https handlers on a
+   * machine like this one, and they are not interchangeable — one of them may
+   * be the browser with the privacy setup the user actually wants this traffic
+   * to go through. Sending it to whichever the desktop happens to default to
+   * makes that choice for them silently.
+   */
+  function pickBrowser(list: { id: string; name: string }[]): Promise<{ id: string; remember: boolean } | null> {
+    return new Promise(resolve => {
+      root.querySelector('.mv-consent')?.remove()
+      const box = el('div', 'mv-consent')
+      box.appendChild(el('h3', '', 'Which browser should this open in?'))
+      const body = el('div', 'mv-consent-body')
+      let chosen = list[0]?.id ?? ''
+      for (const b of list) {
+        const row = el('label', 'mv-pick-row')
+        const radio = document.createElement('input')
+        radio.type = 'radio'
+        radio.name = 'mv-browser'
+        radio.checked = b.id === chosen
+        radio.addEventListener('change', () => { chosen = b.id })
+        row.append(radio, el('span', '', b.name))
+        body.appendChild(row)
+      }
+      const remember = document.createElement('input')
+      remember.type = 'checkbox'
+      remember.checked = true
+      const rem = el('label', 'mv-pick-row mv-pick-remember')
+      rem.append(remember, el('span', '', 'Remember this and stop asking'))
+      body.appendChild(rem)
+      box.appendChild(body)
+      const row = el('div', 'mv-consent-row')
+      const cancel = el('button', 'mv-consent-btn', 'Cancel')
+      const go = el('button', 'mv-consent-btn is-primary', 'Open it')
+      row.append(cancel, go)
+      box.appendChild(row)
+      cancel.addEventListener('click', () => { box.remove(); resolve(null) })
+      go.addEventListener('click', () => { box.remove(); resolve({ id: chosen, remember: remember.checked }) })
+      root.appendChild(box)
+      go.focus()
+    })
+  }
+
+  /** settings + the browser to use, asking for whichever is not decided yet */
+  async function searchContext(engineLabel: string, needConsent: boolean):
+  Promise<{ opts: unknown; appId: string } | null> {
+    const s = await window.liq?.getSettings?.().catch(() => null) as SearchSettings | null
+    if (needConsent && s?.mediaSearchConsent !== 'browser') {
+      // 'no' asks again rather than staying refused forever: the user chose this
+      // entry deliberately, so treating an old "not this time" as a permanent
+      // veto would leave a menu item that silently does nothing
+      if (!await askToSearch(engineLabel)) return null
+    }
+    let appId = s?.mediaSearchBrowser ?? ''
+    if (!appId) {
+      const list = await window.liq?.invoke?.('mediaSearchBrowsers').catch(() => []) as
+        { id: string; name: string }[] ?? []
+      // one browser is not a choice, and no browsers means let the desktop decide
+      if (list.length > 1) {
+        const pick = await pickBrowser(list)
+        if (!pick) return null
+        appId = pick.id
+        if (pick.remember) void window.liq?.setSettings?.({ mediaSearchBrowser: appId })
+      }
+    }
+    return {
+      opts: {
+        unfiltered: s?.mediaSearchUnfiltered !== false,
+        yandexDomain: s?.mediaSearchYandexDomain ?? 'yandex.com',
+      },
+      appId,
+    }
+  }
+
+  /** Copy the picture (or this frame) out, then open the chosen search site. */
+  async function searchFor(engine: string, engineLabel: string): Promise<void> {
+    const it = items[index]
+    if (!it) return
+    const ctx = await searchContext(engineLabel, true)
+    if (!ctx) { showNote('Nothing was sent.'); return }
+    showNote('Copying the picture…')
+    const c = await window.liq?.invoke?.('mediaCopyPicture', it.path, mediaTime())
+      .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as
+      { ok: boolean; error?: string } | undefined
+    if (!c?.ok) { showNote(c?.error ?? 'That picture could not be copied.'); return }
+    const r = await window.liq?.invoke?.('mediaOpenImageSearch', engine, ctx.opts, ctx.appId)
+      .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as
+      { ok: boolean; engine?: string; error?: string } | undefined
+    showNote(r?.ok ? `${r.engine} opened — paste with Ctrl+V` : r?.error ?? 'That site could not be opened.')
+  }
+
+  /** Plain web search for the file's name. Nothing is uploaded at all. */
+  async function searchName(engine: string): Promise<void> {
+    const it = items[index]
+    if (!it) return
+    // strip the extension and the usual separators: "My.Clip.2019.1080p.mkv"
+    // searches far better as words than as a filename
+    const q = it.name.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim()
+    // no consent gate: this uploads nothing, it is a web search for a word
+    const ctx = await searchContext('', false)
+    if (!ctx) return
+    const r = await window.liq?.invoke?.('mediaOpenTextSearch', engine, q, ctx.opts, ctx.appId)
+      .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as
+      { ok: boolean; engine?: string; error?: string } | undefined
+    showNote(r?.ok ? `Searched ${r.engine} for “${q}”` : r?.error ?? 'That search could not be opened.')
+  }
+
+  // ------------------------------------------------------------ deleting
+
+  /**
+   * Delete the file on screen.
+   *
+   * BOTH ROUTES GO TO THE RECYCLE BIN, and that is deliberate. `Shift+Delete`
+   * skips the question, which is the point of it — culling a folder of photos
+   * one key at a time is unusable if every press opens a dialog. But "no
+   * confirmation" is only safe when the action is reversible, so the quiet path
+   * is exactly as recoverable as the asked one and every delete leaves an undo
+   * offer behind. A silent, permanent, unrecoverable delete on a bare keypress
+   * is not a feature this should grow.
+   *
+   * The bar is rendered INSIDE the viewer rather than through the app's toast,
+   * because the popped-out window has no app behind it — a delete there would
+   * otherwise happen with no feedback and no way back.
+   */
+  function deleteCurrent(quiet: boolean): void {
+    const it = items[index]
+    if (!it?.path.startsWith('/')) return
+    if (quiet) { void doDelete(it); return }
+    askDelete(it.name).then(ok => { if (ok) void doDelete(it) })
+  }
+
+  function askDelete(name: string): Promise<boolean> {
+    return new Promise(resolve => {
+      root.querySelector('.mv-consent')?.remove()
+      const box = el('div', 'mv-consent')
+      box.appendChild(el('h3', '', 'Move to the Recycle Bin?'))
+      const body = el('div', 'mv-consent-body')
+      body.appendChild(el('p', '', midName(name)))
+      body.appendChild(el('p', 'mv-consent-note', 'Shift+Delete does this without asking.'))
+      box.appendChild(body)
+      const row = el('div', 'mv-consent-row')
+      const no = el('button', 'mv-consent-btn', 'Keep it')
+      const yes = el('button', 'mv-consent-btn is-primary', 'Delete')
+      row.append(no, yes)
+      box.appendChild(row)
+      const done = (v: boolean): void => { box.remove(); resolve(v) }
+      no.addEventListener('click', () => done(false))
+      yes.addEventListener('click', () => done(true))
+      // Escape and Enter, because a confirmation you must reach for the mouse to
+      // answer is the reason people stop reading confirmations
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); done(false) }
+        if (e.key === 'Enter') { e.stopPropagation(); done(true) }
+      })
+      root.appendChild(box)
+      yes.focus()
+    })
+  }
+
+  /** middle-ellipsised, so a long name does not push the buttons off the box */
+  function midName(n: string): string {
+    return n.length <= 64 ? n : `${n.slice(0, 34)}…${n.slice(-26)}`
+  }
+
+  async function doDelete(it: MediaItem): Promise<void> {
+    const gone = it
+    try {
+      await window.liq?.startOp?.({ kind: 'trash', sources: [gone.path] })
+    } catch (e) {
+      showNote(String((e as Error)?.message ?? e))
+      return
+    }
+    dropItem(gone)
+    showUndoBar(gone.name)
+  }
+
+  /** take a deleted item out of the playlist and land somewhere sensible */
+  function dropItem(gone: MediaItem): void {
+    const at = items.indexOf(gone)
+    if (at < 0) return
+    items.splice(at, 1)
+    strip.setItems(items)
+    if (!items.length) { opts.onClose?.(); return }
+    // deleting the last item lands on the new last one, not back at the top
+    show(Math.min(at, items.length - 1))
+  }
+
+  let undoTimer = 0
+
+  function showUndoBar(name: string): void {
+    root.querySelector('.mv-undobar')?.remove()
+    window.clearTimeout(undoTimer)
+    const bar = el('div', 'mv-undobar')
+    bar.appendChild(el('span', 'mv-undobar-text', `${midName(name)} moved to the Recycle Bin`))
+    const btn = el('button', 'mv-undobar-btn', 'Undo')
+    btn.addEventListener('click', () => {
+      window.clearTimeout(undoTimer)
+      bar.remove()
+      void window.liq?.undo?.()
+        .then(() => showNote(`${midName(name)} put back`))
+        .catch(() => showNote('That could not be undone.'))
+    })
+    bar.appendChild(btn)
+    root.appendChild(bar)
+    // long enough to notice and act on, short enough not to sit over the picture
+    undoTimer = window.setTimeout(() => bar.remove(), 9000)
+  }
+
+  /** Write the frame on screen out as a PNG, beside the video. */
+  async function saveFrame(): Promise<void> {
+    const it = items[index]
+    if (!it) return
+    showNote('Saving this frame…')
+    const r = await window.liq?.invoke?.('mediaSaveFrame', it.path, mediaTime())
+      .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as
+      { ok: boolean; path?: string; error?: string } | undefined
+    showNote(r?.ok ? `Saved ${r.path?.split('/').pop()}` : r?.error ?? 'That frame could not be saved.')
+  }
+
+  /**
+   * Re-encode a gif as a real video.
+   *
+   * Worth having on the menu rather than buried in a tool: a gif is a very poor
+   * container for what is usually video — 256 colours, no inter-frame audio, and
+   * files many times the size of the same seconds as H.264. The conversion is
+   * local, needs nothing but ffmpeg, and is almost always both smaller and
+   * better looking, so it is the one "make this better" that costs nothing.
+   */
+  async function convertGif(format: 'mp4' | 'webm'): Promise<void> {
+    const it = items[index]
+    if (!it) return
+    showNote(`Converting to ${format.toUpperCase()}…`)
+    const r = await window.liq?.invoke?.('mediaGifToVideo', it.path, format)
+      .catch((e: Error) => ({ ok: false, error: String(e?.message ?? e) })) as
+      { ok: boolean; path?: string; saved?: number; error?: string } | undefined
+    if (!r?.ok) { showNote(r?.error ?? 'That gif could not be converted.'); return }
+    const pct = r.saved && r.saved > 0 ? ` — ${r.saved}% smaller` : ''
+    showNote(`Made ${r.path?.split('/').pop()}${pct}`)
+  }
+
+  function renderMenu(entries: MvEntry[], at: { anchor: HTMLElement } | { x: number; y: number }): void {
+    closeMenu()
+    const menu = buildMenuEl(entries)
+    root.appendChild(menu)
+    if ('anchor' in at) {
+      const ar = at.anchor.getBoundingClientRect()
+      const rr = root.getBoundingClientRect()
+      menu.style.right = `${Math.max(6, rr.right - ar.right)}px`
+      menu.style.bottom = `${rr.bottom - ar.top + 6}px`
+    } else {
+      const rr = root.getBoundingClientRect()
+      const mw = menu.offsetWidth || 210
+      const mh = menu.offsetHeight || 200
+      // flip rather than spill: a menu opened near the right or bottom edge of
+      // the panel would otherwise be clipped by the panel's own overflow
+      const lx = Math.min(at.x - rr.left, Math.max(0, rr.width - mw - 6))
+      const ly = Math.min(at.y - rr.top, Math.max(0, rr.height - mh - 6))
+      menu.style.left = `${Math.max(6, lx)}px`
+      menu.style.top = `${Math.max(6, ly)}px`
     }
     const away = (ev: MouseEvent): void => {
-      if (menu.contains(ev.target as Node) || ev.target === anchor) return
-      menu.remove()
-      document.removeEventListener('mousedown', away, true)
+      if (menu.contains(ev.target as Node)) return
+      if ('anchor' in at && ev.target === at.anchor) return
+      closeMenu()
     }
+    menuAway = away
     document.addEventListener('mousedown', away, true)
-    root.appendChild(menu)
-    const ar = anchor.getBoundingClientRect()
-    const rr = root.getBoundingClientRect()
-    menu.style.right = `${Math.max(6, rr.right - ar.right)}px`
-    menu.style.bottom = `${rr.bottom - ar.top + 6}px`
+  }
+
+  function buildMenuEl(entries: MvEntry[]): HTMLElement {
+    const menu = el('div', 'mv-moremenu')
+    for (const e of entries) {
+      if (e.separator) { menu.appendChild(el('div', 'mv-moresep')); continue }
+      const b = el('button', 'mv-moreitem')
+      b.classList.toggle('is-on', !!e.on)
+      b.classList.toggle('is-danger', !!e.danger)
+      b.appendChild(el('span', '', e.label))
+      if (e.submenu) b.appendChild(el('i', 'mv-morearrow', '›'))
+      else if (e.key) b.appendChild(el('kbd', '', e.key))
+      b.disabled = !e.enabled
+      if (e.enabled && e.submenu) {
+        const open = (): void => {
+          menu.querySelector('.mv-moremenu')?.remove()
+          const sub = buildMenuEl(e.submenu!)
+          sub.classList.add('mv-moresub')
+          b.appendChild(sub)
+          placeSubmenu(b, sub)
+        }
+        b.addEventListener('mouseenter', open)
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); open() })
+      } else if (e.enabled) {
+        b.addEventListener('click', () => { closeMenu(); e.run?.(); syncTools() })
+      }
+      menu.appendChild(b)
+    }
+    return menu
+  }
+
+  /**
+   * Put a submenu where it actually fits.
+   *
+   * The CSS opens one to the right of its row (`left: 100%`), which is correct
+   * until the row is near the right edge — and a menu opened by right-clicking
+   * is near the right edge whenever the pointer was. Measured before this
+   * existed: a submenu opened from a menu at x=843 ran to x=1260 in a 1180-wide
+   * window, so a third of it was off-screen and unreachable, with a crude
+   * nth-child CSS rule as the only nod to the problem.
+   *
+   * Measure, then decide. Flip to the LEFT of the row if the right does not
+   * fit; if neither side fits (a narrow window), pin it inside the viewport
+   * rather than picking a side that is wrong anyway. Vertically, lift it just
+   * enough that the bottom stays in — never more, so it stays visually attached
+   * to the row that opened it.
+   */
+  function placeSubmenu(row: HTMLElement, sub: HTMLElement): void {
+    const PAD = 6
+    // start from the stylesheet's defaults so a re-open never inherits the last
+    // decision, which would make the second open of the same menu land wrong
+    sub.style.left = ''
+    sub.style.right = ''
+    sub.style.top = ''
+    sub.style.marginLeft = ''
+    sub.style.marginRight = ''
+
+    const rowRect = row.getBoundingClientRect()
+    const w = sub.offsetWidth
+    const h = sub.offsetHeight
+
+    if (rowRect.right + 2 + w > window.innerWidth - PAD) {
+      if (rowRect.left - 2 - w >= PAD) {
+        // room on the left: flip
+        sub.style.left = 'auto'
+        sub.style.right = '100%'
+        sub.style.marginLeft = '0'
+        sub.style.marginRight = '2px'
+      } else {
+        // neither side fits — sit it inside the viewport, overlapping the row
+        sub.style.left = `${PAD - rowRect.left}px`
+      }
+    }
+
+    // vertical: the default is 5px above the row; lift further only if needed,
+    // and never so far that the top leaves the window
+    const top = sub.getBoundingClientRect().top
+    const over = (top + h) - (window.innerHeight - PAD)
+    if (over > 0) {
+      const lift = Math.min(over, Math.max(0, top - PAD))
+      sub.style.top = `${-5 - lift}px`
+    }
+  }
+
+  function closeMenu(): void {
+    root.querySelector('.mv-moremenu')?.remove()
+    if (menuAway) { document.removeEventListener('mousedown', menuAway, true); menuAway = null }
+  }
+
+  function openMoreMenu(anchor: HTMLElement): void {
+    renderMenu(menuEntries(), { anchor })
   }
 
   function togglePlay(): void {
     const m = handle?.media
     if (!m) return
-    if (m.paused) void m.play().catch(() => { /* nothing to play */ })
-    else m.pause()
+    // the intent is recorded here, where it is unambiguous: element `pause`
+    // events also fire on teardown, on a restart-seek and at the end of a clip,
+    // none of which mean the user wants the next one to stay still
+    if (m.paused) { wantPlay = true; void m.play().catch(() => { /* nothing to play */ }) }
+    else { wantPlay = false; m.pause() }
   }
 
   function toggleMute(): void {
@@ -1134,14 +1706,27 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
 
   // ------------------------------------------------------------- image zoom
 
+  /**
+   * The scale that makes the picture fit the stage.
+   *
+   * This used to clamp at 1 — "no bigger than its own pixels" — so fit only
+   * ever shrank. The consequence showed up as a bug and it is a fair one: go
+   * fullscreen with anything smaller than the display and the picture just sat
+   * there at native size in the middle of a black screen, having apparently
+   * ignored the request. Fit now means fit, and grows as well as shrinks, so
+   * the picture tracks the box through fullscreen, a panel resize and theatre.
+   *
+   * The cap is what the old clamp was really protecting against: a 16×16 icon
+   * scaled to a 4K display is 120× of blur that nobody asked for. Eight is
+   * generous for anything photographic (a 640×480 photo needs 3× to fill a
+   * 1920 screen) and still refuses the absurd cases.
+   */
   function fitScale(): number {
     const h = handle
     if (!h?.image || !h.width || !h.height) return 1
     const r = stage.getBoundingClientRect()
     if (!r.width || !r.height) return 1
-    // never blow a 16×16 icon up to fill the panel: fit means "no bigger than
-    // its own pixels", which is what Photos does with small images
-    return Math.min(1, r.width / h.width, r.height / h.height)
+    return Math.min(MAX_FIT_UPSCALE, r.width / h.width, r.height / h.height)
   }
 
   function applyZoom(): void {
@@ -1271,6 +1856,22 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     opts.onFullscreen?.()
   })
 
+  /**
+   * Right-click anywhere on the viewer.
+   *
+   * On the whole root, not just the stage: the point of a context menu here is
+   * that it is the ONLY menu the popped-out window has — that window has no
+   * command bar, no file list and no app behind it, so a right-click landing on
+   * the header or the transport bar and doing nothing would read as broken.
+   */
+  root.addEventListener('contextmenu', (e) => {
+    // let a real text field keep the system menu (the rename box lives here)
+    const t = e.target as HTMLElement
+    if (t.closest('input, textarea') || t.isContentEditable) return
+    e.preventDefault()
+    renderMenu(menuEntries(), { x: e.clientX, y: e.clientY })
+  })
+
   prevBtn.addEventListener('click', () => show(index - 1))
   nextBtn.addEventListener('click', () => show(index + 1))
   popoutBtn.addEventListener('click', () => opts.onPopout?.(state()))
@@ -1291,7 +1892,13 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
   // ------------------------------------------------------------------ keys
 
   function handleKey(e: KeyboardEvent): boolean {
-    if (e.ctrlKey || e.metaKey || e.altKey) return false
+    // Modified keys belong to the app (Ctrl+C, Ctrl+W, Alt+Enter...), with one
+    // exception: BulkMediaManager's player uses Ctrl+Left/Right for a 30-second
+    // seek, and matching it is the point of this key map. Nothing else in the
+    // app claims Ctrl+Arrow while a viewer has focus.
+    const ctrlSeek = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+      && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+    if ((e.ctrlKey || e.metaKey || e.altKey) && !ctrlSeek) return false
     // mode switches work from any mode
     if (e.key === 'w' || e.key === 'W') { setMode(vmode === 'wall' ? 'single' : 'wall'); return true }
     if (e.key === 't' || e.key === 'T') { setMode(vmode === 'theatre' ? 'single' : 'theatre'); return true }
@@ -1299,6 +1906,11 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
     // it does not claim (Escape, F, the rating digits) falls through to the
     // handler below, which is why this is a first refusal and not a return.
     if (vmode === 'wall' && wall?.handleKey(e)) return true
+    // Delete is claimed HERE, before the triage deck sees it, so there is one
+    // delete in the viewer rather than two that drift: the deck used to have
+    // its own silent recycle that only worked while the deck was open, which
+    // meant the same key did different things depending on a panel being up.
+    if (e.key === 'Delete') { deleteCurrent(e.shiftKey); return true }
     // first refusal: while the deck is up the digits mean ratings, not zoom
     if (triage?.handleKey(e)) { syncTools(); return true }
     const k = e.key
@@ -1307,19 +1919,25 @@ export function createViewer(opts: ViewerOptions): ViewerHandle {
       case ' ':
         if (!media) return false
         togglePlay(); return true
+      // bare arrow = previous/next FILE; Shift = seek 5s; Ctrl = seek 30s
       case 'ArrowLeft':
-        if (e.shiftKey || !media) { show(index - 1); return true }
-        seekBy(-SEEK_STEP); return true
+        if (media && e.shiftKey) { seekBy(-SEEK_STEP); return true }
+        if (media && e.ctrlKey) { seekBy(-SEEK_STEP_FAST); return true }
+        show(index - 1); return true
       case 'ArrowRight':
-        if (e.shiftKey || !media) { show(index + 1); return true }
-        seekBy(SEEK_STEP); return true
+        if (media && e.shiftKey) { seekBy(SEEK_STEP); return true }
+        if (media && e.ctrlKey) { seekBy(SEEK_STEP_FAST); return true }
+        show(index + 1); return true
       case 'PageUp': show(index - 1); return true
       case 'PageDown': show(index + 1); return true
       case 'Home':
         if (media) { seekTo(0); return true }
         show(0); return true
       case 'End':
-        if (media && mediaDuration() > 0) { seekTo(mediaDuration() - 0.25); return true }
+        // 1.5s from the end, like BulkMediaManager: landing exactly on the
+        // duration fires 'ended' and skips to the next file, which is not what
+        // "go to the end" means
+        if (media && mediaDuration() > 0) { seekTo(Math.max(0, mediaDuration() - 1.5)); return true }
         show(items.length - 1); return true
       case 'ArrowUp':
         if (!media) return false

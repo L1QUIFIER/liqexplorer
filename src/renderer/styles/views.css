@@ -184,13 +184,33 @@ img.vh-thumbimg { border-radius: 2px; }
   -webkit-box-orient: vertical;
   word-break: break-word;
 }
-.vh-grid.selected { z-index: 2; overflow: visible; }
-/* the selected item shows its whole name, spilling over its neighbours the way
-   Explorer does — with a background so the overlap stays readable */
+/* A SELECTED TILE GROWS TO FIT ITS NAME.
+ *
+ * The selected item shows its whole filename, the way Explorer does. It used to
+ * do that by letting the LABEL overflow the tile: the label got its own
+ * background and spilled past the bottom edge. That looked broken, and measured
+ * it was — the tile stayed 148px while the label ran to 122px starting halfway
+ * down, so the selection ring was drawn across the middle of the text and cut
+ * a word in half, and the label's own narrower background stuck out underneath
+ * as a second, misaligned block.
+ *
+ * The tile grows instead. Grid items are absolutely positioned, so a taller one
+ * overlaps its neighbours without reflowing the grid — which is the behaviour
+ * that was wanted all along — and because the ring and background belong to the
+ * tile, they now wrap the whole name. `min-height` (set inline in
+ * views/view-host.ts) keeps a short name at its full cell size, so selection
+ * does not make small tiles shrink.
+ */
+.vh-grid.selected {
+  z-index: 2;
+  overflow: visible;
+  height: auto !important;
+}
 .vh-grid.selected .vh-label {
   -webkit-line-clamp: 8;
-  background: var(--bg-selected);
-  border-radius: var(--radius);
+  /* no background of its own any more: the tile behind it is the box, and two
+     overlapping rounded rectangles were exactly the artefact being fixed */
+  width: 100%;
   /* the bottom 2px is NOT decoration: the shorthand would otherwise reset the
      descender allowance set above, and the selected state is exactly when the
      label is longest and the last line most likely to carry a g/j/p/q/y */
@@ -630,3 +650,42 @@ body.is-colresizing * { cursor: col-resize !important; }
 }
 /* selection must still win: it is the state the user is acting on */
 .vh-item.is-fav.selected { box-shadow: none; }
+
+/* ------------------------------------------------- link / shortcut emblem
+
+   Marks anything that POINTS at something else — a symlink, or a Windows .lnk.
+   Neither was distinguished before, so a folder of shortcuts looked exactly
+   like a folder of files.
+
+   Bottom-LEFT: ratings own bottom-right and the Favorites bookmark owns
+   top-right, so all three can appear on one tile without overlapping. */
+
+.vh-iconwrap { position: relative; display: inline-flex; flex: none; line-height: 0; }
+
+.vh-linkemblem {
+  position: absolute;
+  /* hugs the wrapper rather than hanging outside it. For a thumbnail or a row
+     icon the wrapper IS the picture, so this lands on the corner exactly; for a
+     small mime icon inside a big grid cell it sits just below-left of it, which
+     still reads as "this points somewhere". */
+  left: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  /* its own ground: the emblem sits on a thumbnail of unknown colour, and a
+     bare arrow disappears against half of them */
+  background: rgba(20, 20, 20, 0.82);
+  color: #fff;
+  pointer-events: none;
+}
+.vh-linkemblem svg { width: 8px; height: 8px; display: block; }
+
+/* on the bigger thumbnails the icon is worth a bigger emblem */
+.vh-grid.vh-large .vh-linkemblem,
+.vh-grid.vh-extra-large .vh-linkemblem { width: 16px; height: 16px; border-radius: 4px; }
+.vh-grid.vh-large .vh-linkemblem svg,
+.vh-grid.vh-extra-large .vh-linkemblem svg { width: 11px; height: 11px; }

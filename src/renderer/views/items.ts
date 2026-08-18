@@ -7,7 +7,7 @@ import type { FileEntry, ViewMode } from '../../shared/types'
 import { formatDate, formatSize, typeLabelFor } from '../../shared/sort'
 import type { Group } from '../../shared/sort'
 import { archiveUri, isArchiveUri, parseArchiveUri } from '../../shared/archive'
-import { liq } from '../core/app'
+import { app, liq } from '../core/app'
 // self-mounting: importing livemedia installs the live-preview driver (its own
 // listeners + stylesheet), so nothing else in the app needs a line for it
 import { markLive } from './livemedia'
@@ -85,7 +85,14 @@ export function iconURL(e: FileEntry | string[], size: number): string {
 const THUMB_MODES = new Set<ViewMode>(['extra-large', 'large', 'medium', 'tiles', 'content'])
 
 export function wantsThumb(e: FileEntry, mode: ViewMode): boolean {
-  if (!THUMB_MODES.has(mode) || e.isDir) return false
+  if (!THUMB_MODES.has(mode)) return false
+  if (e.isDir) {
+    // A folder shows what is in it. Real folders only: trash://, computer://
+    // and a directory inside an archive have no path to scan, and the <img>
+    // error handler below already falls back to the plain folder icon for any
+    // folder that turns out to hold no pictures, so nothing here has to guess.
+    return app.settings.folderPreviews !== false && e.path.startsWith('/')
+  }
   return e.mime.startsWith('image/') || e.mime.startsWith('video/') || e.mime === 'application/pdf'
 }
 
@@ -179,6 +186,32 @@ const FAV_BADGE =
   + '<svg viewBox="0 0 16 16"><path d="M4.5 2.5h7a1 1 0 0 1 1 1v10l-4.5-3-4.5 3v-10a1 1 0 0 1 1-1z"/></svg>'
   + '</span>'
 
+/**
+ * Is this entry a POINTER at something else?
+ *
+ * Two unrelated mechanisms, one meaning. A symlink is one the filesystem knows
+ * about; a .lnk is a Windows shortcut, which on Linux is just a small binary
+ * file and looks like any other document. Neither was marked in any view, so a
+ * folder of shortcuts looked like a folder of files — and the whole point of a
+ * shortcut is that you can tell it apart from the thing it points at.
+ */
+function isLink(e: FileEntry): boolean {
+  return !!e.isSymlink || e.ext === 'lnk'
+}
+
+/**
+ * The arrow, drawn over the bottom-LEFT of the icon.
+ *
+ * Bottom-left because the other two corners are taken: ratings sit bottom-right
+ * and the Favorites bookmark top-right. Three marks can therefore appear on one
+ * tile without any of them covering another.
+ */
+const LINK_EMBLEM =
+  '<span class="vh-linkemblem" aria-hidden="true">'
+  + '<svg viewBox="0 0 16 16"><path d="M5 11 11 5M6.5 4.5H11.5V9.5" fill="none" '
+  + 'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  + '</span>'
+
 export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void {
   const name = escapeHtml(displayName(e, ctx.showExt))
   const mode = ctx.mode
@@ -190,7 +223,8 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
       const c = cols[i]
       if (i === 0) {
         html += `<div class="vh-cell vh-namecell" style="width:${c.width}px">${CHECK}` +
-          `<img class="vh-icon" width="16" height="16" alt="">` +
+          `<span class="vh-iconwrap"><img class="vh-icon" width="16" height="16" alt="">` +
+          `${isLink(e) ? LINK_EMBLEM : ''}</span>` +
           `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span></div>`
       } else if (c.key === 'rating') {
         // the one column whose value is markup rather than text, so it cannot
@@ -209,12 +243,14 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
     }
   } else if (mode === 'list' || mode === 'small') {
     el.className = 'vh-item vh-row vh-listrow' + favCls(e)
-    html = `${CHECK}<img class="vh-icon" width="16" height="16" alt="">` +
+    html = `${CHECK}<span class="vh-iconwrap"><img class="vh-icon" width="16" height="16" alt="">` +
+      `${isLink(e) ? LINK_EMBLEM : ''}</span>` +
       `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>`
   } else if (mode === 'content') {
     el.className = 'vh-item vh-row vh-content' + favCls(e)
     const sub = ctx.searchMode ? dirname(e.path) : typeLabelFor(e)
-    html = `${CHECK}<span class="vh-thumbwrap" style="width:32px;height:32px"><img class="vh-icon" alt=""></span>` +
+    html = `${CHECK}<span class="vh-thumbwrap" style="width:32px;height:32px"><img class="vh-icon" alt="">` +
+      `${isLink(e) ? LINK_EMBLEM : ''}</span>` +
       `<span class="vh-content-main"><span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>` +
       `<span class="vh-sub">${escapeHtml(sub)}</span></span>` +
       `<span class="vh-content-right"><span>${escapeHtml(formatDate(e.mtime))}</span>` +
@@ -222,7 +258,8 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
   } else if (mode === 'tiles') {
     el.className = 'vh-item vh-tile' + favCls(e)
     html = `${CHECK}<span class="vh-thumbwrap" style="width:48px;height:48px"><img class="vh-icon" alt="">` +
-      `${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}</span>` +
+      `${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}` +
+      `${isLink(e) ? LINK_EMBLEM : ''}</span>` +
       `<span class="vh-tile-lines"><span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>` +
       `<span class="vh-sub">${escapeHtml(typeLabelFor(e))}</span>` +
       `<span class="vh-sub">${e.isDir ? '' : escapeHtml(formatSize(e.size))}</span></span>`
@@ -233,7 +270,8 @@ export function renderEntry(el: HTMLElement, e: FileEntry, ctx: RenderCtx): void
     // cover the filename — including when selecting a tile expands the label to
     // eight lines, which is where the old overlay was at its worst.
     html = `${CHECK}<span class="vh-thumbwrap" style="width:${ctx.icon}px;height:${ctx.icon}px">` +
-      `<img class="vh-icon" alt="">${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}</span>` +
+      `<img class="vh-icon" alt="">${e.isDir ? '' : ratingBadgeHtml(e.rating ?? 0)}${favCls(e) ? FAV_BADGE : ''}` +
+      `${isLink(e) ? LINK_EMBLEM : ''}</span>` +
       `<span class="vh-label" title="${escapeHtml(e.name)}">${name}</span>`
   }
   el.innerHTML = html

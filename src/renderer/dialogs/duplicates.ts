@@ -13,7 +13,7 @@
 // go through liq.startOp(), so they get the normal progress cards, conflict
 // handling and Ctrl+Z, exactly like a drag-and-drop would.
 import type {
-  DupFile, DupGroup, DupPrefs, DupProgress, DupScanResult,
+  DupAttachReply, DupFile, DupGroup, DupPrefs, DupProgress, DupScanResult, DupScanSummary,
 } from '../../shared/duplicates'
 import { DEFAULT_DUP_PREFS, DUP_PUSH, totalDuplicates, totalWasted } from '../../shared/duplicates'
 import { formatDate, formatSize } from '../../shared/sort'
@@ -104,6 +104,10 @@ async function show(req: DuplicatesRequest): Promise<void> {
   let scanning = false
   /** the dialog is gone: a scan that reports in after this must be stopped */
   let dismissed = false
+  /** set once the results page is live; appends groups as they are confirmed */
+  let appendLive: ((gs: DupGroup[]) => void) | null = null
+  /** swap the live page over to its finished state */
+  let finishLive: ((res: DupScanResult) => void) | null = null
   let offPush: (() => void) | null = null
 
   const modal = openModal({
@@ -113,7 +117,11 @@ async function show(req: DuplicatesRequest): Promise<void> {
   })
   const close = (): void => {
     dismissed = true
-    if (scanning && scanId) void liq.invoke('cancelDupScan', scanId).catch(() => {})
+    // DETACH, do not cancel. Closing this dialog used to throw away every byte
+    // hashed so far — on a network share that is minutes of work discarded
+    // because someone wanted to go and look at a folder. The scan keeps
+    // running; reopening re-attaches and replays everything it found.
+    if (scanning && scanId) void liq.invoke('detachDupScan', scanId).catch(() => {})
     scanning = false
     offPush?.()
     offPush = null
@@ -231,14 +239,20 @@ async function show(req: DuplicatesRequest): Promise<void> {
     // a scan can finish (or be cancelled) before startDupScan has even resolved,
     // so the id is applied through these two flags rather than assumed
     let wantCancel = false
-    const cancelBtn = el('button', 'btn btn-primary', 'Cancel')
+    const cancelBtn = el('button', 'btn btn-primary', 'Cancel scan')
     cancelBtn.addEventListener('click', () => {
       cancelBtn.disabled = true
       cancelBtn.textContent = 'Cancelling…'
       wantCancel = true
       if (scanId) void liq.invoke('cancelDupScan', scanId).catch(() => {})
     })
-    buttons.appendChild(cancelBtn)
+    // Two different things, and they were one button. "Cancel" stops the scan;
+    // closing the dialog now DETACHES and leaves it running, which is useless
+    // if the only control on this page is the one that kills it.
+    const keepBtn = el('button', 'btn', 'Close, keep scanning')
+    keepBtn.title = 'Hide this window and let the scan carry on — reopen it to see what it found'
+    keepBtn.addEventListener('click', () => close())
+    buttons.append(cancelBtn, el('div', 'dlg-buttons-spacer'), keepBtn)
     cancelBtn.focus()
 
     const paint = (p: DupProgress): void => {
@@ -263,10 +277,22 @@ async function show(req: DuplicatesRequest): Promise<void> {
         scanning = false
         offPush?.()
         offPush = null
-        showResults(p.result)
+        // already showing results: keep them (and the user's ticks) and just
+        // switch the page over, rather than rebuilding the list underneath them
+        if (finishLive) finishLive(p.result)
+        else showResults(p.result)
         return
       }
-      paint(p)
+      // The FIRST batch of confirmed groups turns the progress page into the
+      // results page. Everything after that is appended. This is the whole
+      // point of the streaming scanner: a duplicate found in the first seconds
+      // is shown in the first seconds.
+      if (p.groups?.length) {
+        if (!appendLive) showResults(liveResult(p), true)
+        appendLive?.(p.groups)
+      }
+      if (appendLive) paintLive(p)
+      else paint(p)
     })
 
     try {
@@ -291,9 +317,29 @@ async function show(req: DuplicatesRequest): Promise<void> {
 
   // ------------------------------------------------------------ results page
 
-  function showResults(res: DupScanResult): void {
+  /** a stand-in result so the results page can be built before the scan ends */
+  function liveResult(p: DupProgress): DupScanResult {
+    return {
+      scanId: p.scanId, groups: [], roots, filesScanned: p.filesSeen,
+      candidates: p.candidates, bytesHashed: p.bytesHashed, elapsedMs: 0,
+      remote: false, cancelled: false, truncated: !!p.truncated,
+      hardLinks: 0, unreadable: 0, errors: [],
+    }
+  }
+
+  /** the live header while groups are still arriving */
+  function paintLive(p: DupProgress): void {
+    const n = p.foundGroups ?? 0
+    liveStatus.textContent = p.done ? '' : `Scanning… ${n.toLocaleString('en-US')} `
+      + `group${n === 1 ? '' : 's'} so far · ${formatSize(p.foundWasted ?? 0)} recoverable`
+    liveStatus.title = p.current
+  }
+
+  const liveStatus = el('div', 'dup-live')
+
+  function showResults(res: DupScanResult, live = false): void {
     reset()
-    scanId = 0
+    if (!live) scanId = 0
     const gus: GroupUI[] = res.groups.map(g => ({
       group: g,
       rows: g.files.map(f => ({ file: f, checked: false, node: null, box: null })),
@@ -303,7 +349,7 @@ async function show(req: DuplicatesRequest): Promise<void> {
     const wasted = totalWasted(res.groups)
     titleText.textContent = res.cancelled ? 'Duplicate files (scan cancelled)' : 'Duplicate files'
 
-    if (!gus.length) {
+    if (!gus.length && !live) {
       body.appendChild(el('div', 'dup-status', res.cancelled
         ? 'The scan was cancelled before it finished.'
         : 'No duplicate files were found.'))
@@ -318,7 +364,7 @@ async function show(req: DuplicatesRequest): Promise<void> {
     }
 
     const summary = el('div', 'dup-summary', '')
-    body.appendChild(summary)
+    body.append(summary, liveStatus)
     body.appendChild(el('div', 'dup-hint',
       'Tick the copies you want to get rid of. The unticked file in each group is the one '
       + 'that stays — a group can never have all of its files ticked.'))
@@ -338,7 +384,7 @@ async function show(req: DuplicatesRequest): Promise<void> {
       () => keepBy(gus, g => pickBy(g, (a, b) => a.file.mtime - b.file.mtime)))
     // one per scanned folder: with two roots this is how you say "this is the
     // library, that is the dumping ground"
-    for (const root of res.roots.slice(0, 3)) {
+    for (const root of (res.roots.length ? res.roots : roots).slice(0, 3)) {
       toolBtn(`Keep in ${shortName(root)}`,
         `Keep the copy inside ${root} and tick copies anywhere else `
         + '(a group with no copy there keeps its newest file)',
@@ -365,7 +411,65 @@ async function show(req: DuplicatesRequest): Promise<void> {
       more.hidden = shown >= gus.length
     }
     renderMore()
-    body.append(more, footnotes(res))
+    const notes = footnotes(res)
+    body.append(more, notes)
+
+    /**
+     * Append groups confirmed since the last push.
+     *
+     * ARRIVAL ORDER, always, while the scan runs. The scanner works
+     * largest-file-first so arrival order is already close to "most recoverable
+     * space first", and re-sorting live would move rows out from under a
+     * half-finished set of ticks — the one thing that would make streaming
+     * worse than waiting.
+     */
+    appendLive = (incoming: DupGroup[]): void => {
+      const wasAtEnd = shown >= gus.length
+      for (const g of incoming) {
+        gus.push({
+          group: g,
+          rows: g.files.map(f => ({ file: f, checked: false, node: null, box: null })),
+          node: null,
+        })
+      }
+      // only auto-render the new ones if the user had already paged to the end;
+      // otherwise leave them behind "Show more" rather than growing the page
+      // under a pointer that is halfway down it
+      if (wasAtEnd) renderMore()
+      else {
+        more.textContent = `Show more (${(gus.length - shown).toLocaleString('en-US')} groups left)`
+        more.hidden = shown >= gus.length
+      }
+      sync()
+    }
+
+    finishLive = (final: DupScanResult): void => {
+      appendLive = null
+      finishLive = null
+      scanId = 0
+      liveStatus.textContent = ''
+      titleText.textContent = final.cancelled ? 'Duplicate files (scan cancelled)' : 'Duplicate files'
+      notes.replaceWith(footnotes(final))
+      // The finished result is sorted by recoverable space, but the list on
+      // screen is in arrival order and may already carry ticks. Offer the sort
+      // instead of performing it — a list that rearranges itself the moment a
+      // scan ends is how a careful selection gets lost.
+      if (gus.length > 1) {
+        const sortBtn = el('button', 'btn btn-small', 'Sort by space saved')
+        sortBtn.title = 'Reorder the groups, biggest recoverable space first'
+        sortBtn.addEventListener('click', () => {
+          gus.sort((a, b) => b.group.wasted - a.group.wasted || b.group.size - a.group.size)
+          list.textContent = ''
+          shown = 0
+          renderMore()
+          sync()
+          sortBtn.disabled = true
+        })
+        tools.appendChild(sortBtn)
+      }
+      liveButtons(false)
+      sync()
+    }
 
     // -- actions
     const trashBtn = el('button', 'btn btn-primary', 'Move to Recycle Bin')
@@ -374,7 +478,27 @@ async function show(req: DuplicatesRequest): Promise<void> {
     const moveBtn = el('button', 'btn', 'Move to folder…')
     const closeBtn = el('button', 'btn', 'Close')
     closeBtn.addEventListener('click', close)
-    buttons.append(trashBtn, delBtn, moveBtn, el('div', 'dlg-buttons-spacer'), closeBtn)
+    const stopBtn = el('button', 'btn', 'Stop scanning')
+    stopBtn.title = 'Stop the scan and keep what it has found so far'
+    stopBtn.addEventListener('click', () => {
+      stopBtn.disabled = true
+      stopBtn.textContent = 'Stopping…'
+      if (scanId) void liq.invoke('cancelDupScan', scanId).catch(() => {})
+    })
+
+    /**
+     * Acting on files WHILE the scan runs is allowed, so the buttons are the
+     * same either way — only the stop control comes and goes. Deleting a copy
+     * mid-scan is exactly what someone watching results arrive will want to do,
+     * and the op engine makes it undoable whether or not a scan is in flight.
+     */
+    function liveButtons(live: boolean): void {
+      buttons.textContent = ''
+      buttons.append(trashBtn, delBtn, moveBtn, el('div', 'dlg-buttons-spacer'))
+      if (live) buttons.appendChild(stopBtn)
+      buttons.appendChild(closeBtn)
+    }
+    liveButtons(live)
 
     const selected = (): string[] => {
       const out: string[] = []
@@ -493,7 +617,78 @@ async function show(req: DuplicatesRequest): Promise<void> {
     trashBtn.focus()
   }
 
-  showOptions()
+  /**
+   * Reopen onto a scan that is already running, instead of starting a new one.
+   *
+   * This is the other half of detach-on-close: without it, closing the dialog
+   * and reopening it would leave the old scan grinding away invisibly while a
+   * second one started over the same folders — twice the reads on a share, and
+   * two answers to the same question.
+   */
+  async function resumeOrAsk(): Promise<void> {
+    let running: DupScanSummary[] = []
+    try { running = await liq.invoke('listDupScans') as DupScanSummary[] } catch { /* none */ }
+    /**
+     * Which scan, if any, this open should adopt.
+     *
+     * Not simply "the newest": a finished or cancelled scan must never hijack a
+     * request for a different folder. Asking for duplicates in Pictures and
+     * being shown yesterday's cancelled scan of Code is worse than no resume at
+     * all, and it happened.
+     *
+     *   still running          adopt it — that is the whole point of detaching,
+     *                          and starting a second scan over the same share
+     *                          would double the reads
+     *   finished, same roots   adopt it — it finished while the dialog was
+     *                          closed, and the answer is exactly what was asked
+     *   cancelled             never — stopping was a decision, not a pause
+     *   anything else         start fresh
+     */
+    const same = (sc: DupScanSummary): boolean =>
+      sc.roots.length === roots.length && sc.roots.every((r: string) => roots.includes(r))
+    const usable = running.filter(sc => sc.stage !== 'cancelled')
+    const pick = usable.filter(sc => !sc.done && same(sc)).sort((a, b) => b.startedAt - a.startedAt)[0]
+      ?? usable.filter(sc => !sc.done).sort((a, b) => b.startedAt - a.startedAt)[0]
+      ?? usable.filter(sc => sc.done && same(sc)).sort((a, b) => b.startedAt - a.startedAt)[0]
+    if (!pick) { showOptions(); return }
+
+    const att = await liq.invoke('attachDupScan', pick.scanId)
+      .catch(() => ({ ok: false })) as DupAttachReply
+    if (!att.ok || !att.progress) { showOptions(); return }
+
+    scanId = pick.scanId
+    roots = pick.roots.length ? pick.roots : roots
+    if (att.progress.done) {
+      // it finished while we were away: show what it found, as a finished scan
+      showResults({
+        ...liveResult(att.progress),
+        groups: att.groups ?? [],
+        roots,
+        cancelled: att.progress.stage === 'cancelled',
+      })
+      return
+    }
+    // still going: rebuild the live page from everything it found while closed,
+    // then keep streaming
+    scanning = true
+    showResults({ ...liveResult(att.progress), roots }, true)
+    if (att.groups?.length) appendLive?.(att.groups)
+    paintLive(att.progress)
+    offPush = liq.on(DUP_PUSH, (p: DupProgress) => {
+      if (p.scanId !== scanId || !scanning) return
+      if (p.done && p.result) {
+        scanning = false
+        offPush?.()
+        offPush = null
+        finishLive ? finishLive(p.result) : showResults(p.result)
+        return
+      }
+      if (p.groups?.length) appendLive?.(p.groups)
+      paintLive(p)
+    })
+  }
+
+  void resumeOrAsk()
 }
 
 // ---------------------------------------------------------------- helpers

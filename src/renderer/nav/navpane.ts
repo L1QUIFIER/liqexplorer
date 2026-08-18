@@ -21,12 +21,13 @@ import { FINDER_URI } from '../../shared/types'
 import { app, liq, HOME_URI } from '../core/app'
 import type { Tab } from '../core/app'
 import { defaultDragEffect } from '../views/rightdrag'
+import { SPRING_LOAD_MS } from '../views/spring'
 
 const MIN_W = 120
 const MAX_W = 420
 const INDENT_PX = 12          // indent per tree level
 const BASE_PAD_PX = 13        // row left padding at depth 0
-const HOVER_EXPAND_MS = 800   // spring-load delay during drag
+// spring-load delay during a drag — shared with the tab strip (views/dnd.ts)
 const EXPAND_DEADLINE_MS = 5000
 
 const CHEVRON_SVG =
@@ -271,7 +272,7 @@ export function mountNavPane(root: HTMLElement): void {
       row.classList.add('drop-target')
       const n = opts.node
       if (n && n.expandable && !n.expanded && !hoverTimer) {
-        hoverTimer = window.setTimeout(() => { hoverTimer = 0; void expandNode(n) }, HOVER_EXPAND_MS)
+        hoverTimer = window.setTimeout(() => { hoverTimer = 0; void expandNode(n) }, SPRING_LOAD_MS)
       }
     })
     row.addEventListener('dragleave', (e) => {

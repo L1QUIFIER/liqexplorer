@@ -389,6 +389,80 @@ function buildSystem(root: HTMLElement): void {
   }).catch(() => { intro.textContent = 'The system check could not run.' })
 }
 
+/**
+ * Windows shortcut mappings.
+ *
+ * Most .lnk files on a shared drive follow themselves without any of this: the
+ * path they store relative to their own folder still points inside the tree
+ * that was copied across, and a UNC target is matched against the shares this
+ * machine has mounted. This is for the rest — the ones that name a drive
+ * letter, where only the user knows that C:\\Users\\me\\OneDrive is the folder
+ * mounted here as /mnt/share/OneDrive.
+ */
+function buildShortcuts(root: HTMLElement): void {
+  const g = group(root, 'Windows shortcuts (.lnk)')
+  g.appendChild(el('div', 'opt-hint',
+    'Double-clicking a shortcut follows it. Ones that point inside a folder you copied across '
+    + 'work on their own; add a mapping here for shortcuts that name a Windows drive.'))
+
+  const list = el('div', 'opt-list')
+  g.appendChild(list)
+
+  const maps = (): Record<string, string> => ({ ...(app.settings.lnkMappings ?? {}) })
+
+  const render = (): void => {
+    list.textContent = ''
+    const cur = maps()
+    const keys = Object.keys(cur)
+    if (!keys.length) { list.appendChild(el('div', 'opt-list-empty', 'No mappings.')); return }
+    for (const k of keys) {
+      const row = el('div', 'opt-list-row')
+      row.appendChild(el('span', 'opt-list-text', `${k}  →  ${cur[k]}`))
+      const x = el('button', 'opt-list-x', '✕')
+      x.title = `Remove the mapping for ${k}`
+      x.addEventListener('click', () => {
+        const next = maps()
+        delete next[k]
+        void app.setSettings({ lnkMappings: next }).then(render)
+      })
+      row.appendChild(x)
+      list.appendChild(row)
+    }
+  }
+
+  const addRow = el('div', 'opt-row')
+  const winInput = el('input', 'opt-input') as HTMLInputElement
+  winInput.type = 'text'
+  winInput.spellcheck = false
+  winInput.placeholder = 'C:\\Users\\you\\OneDrive'
+  const hereInput = el('input', 'opt-input') as HTMLInputElement
+  hereInput.type = 'text'
+  hereInput.spellcheck = false
+  hereInput.placeholder = '/mnt/share/OneDrive'
+  const browse = el('button', 'btn btn-small', 'Browse…')
+  browse.addEventListener('click', () => {
+    void liq.invoke('pickFolder', hereInput.value || undefined).then((p: string | null) => {
+      if (p) hereInput.value = p
+    }).catch(() => {})
+  })
+  const add = el('button', 'btn btn-small', 'Add')
+  add.addEventListener('click', () => {
+    const from = winInput.value.trim().replace(/[\\/]+$/, '')
+    const to = hereInput.value.trim().replace(/\/+$/, '')
+    if (!from || !to.startsWith('/')) return
+    const next = maps()
+    next[from] = to
+    void app.setSettings({ lnkMappings: next }).then(() => {
+      winInput.value = ''
+      hereInput.value = ''
+      render()
+    })
+  })
+  addRow.append(winInput, hereInput, browse, add)
+  g.appendChild(addRow)
+  render()
+}
+
 // ------------------------------------------------------------- extensions
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -850,6 +924,7 @@ function pathList(
 
 function buildGeneral(root: HTMLElement): void {
   const s = app.settings
+  buildShortcuts(root)
 
   const open = group(root, 'Open File Explorer to')
   const openOptions: [string, string][] = [
@@ -952,6 +1027,39 @@ function buildView(root: HTMLElement): void {
   const theme = group(root, 'Appearance')
   dropdown(theme, [['system', 'Follow system theme'], ['light', 'Light'], ['dark', 'Dark']],
     s.theme, v => { void app.setSettings({ theme: v as AppSettings['theme'] }) })
+
+  // ---- accent colour ----
+  //
+  // Offered because the app is a Windows-11 lookalike running on a Linux
+  // desktop that already HAS an accent, and ignoring it is the thing that makes
+  // an application look imported rather than installed.
+  choiceRow(theme, 'Accent colour',
+    s.accentSource === 'app' ? 'app' : s.accentSource === 'custom' ? 'custom' : 'system',
+    [['system', 'Match my desktop'], ['app', 'Windows 11 blue'], ['custom', 'Choose…']],
+    v => {
+      custom.hidden = v !== 'custom'
+      void app.setSettings({ accentSource: v as AppSettings['accentSource'] })
+    })
+  const accentNote = el('div', 'opt-hint opt-accent-note')
+  theme.appendChild(accentNote)
+  const custom = el('input')
+  custom.type = 'color'
+  custom.className = 'opt-accent-picker'
+  custom.value = s.accentColor || '#0067c0'
+  custom.hidden = s.accentSource !== 'custom'
+  custom.addEventListener('change', () => { void app.setSettings({ accentColor: custom.value }) })
+  theme.appendChild(custom)
+  // say WHERE the colour came from: "match my desktop" is a promise, and a
+  // theme that declares nothing has to admit it rather than quietly do nothing
+  void liq.invoke('systemAccent', document.documentElement.dataset.theme === 'dark')
+    .then((info: unknown) => {
+      const i = (info ?? {}) as { color?: string; source?: string; detail?: string }
+      accentNote.textContent = !i.color
+        ? `Your theme (${i.detail || 'unknown'}) does not publish an accent colour, so the app's own is used.`
+        : `Using ${i.color} from ${i.source === 'kde' ? 'your KDE colour scheme'
+          : i.source === 'gnome' ? 'your GNOME accent setting' : `your GTK theme (${i.detail})`}.`
+    })
+    .catch(() => { accentNote.textContent = '' })
 
   const layout = group(root, 'Layout')
   check(layout, 'Navigation pane', s.showNavPane,

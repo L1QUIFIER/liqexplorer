@@ -7,6 +7,9 @@ import { sortKeysFor } from '../../shared/sort'
 import { showMenu } from '../menus/menu'
 import type { MenuItem } from '../menus/menu-types'
 import { ratingFilterSubmenu } from '../views/ratings'
+import { openConvertDialog, runChecksums } from '../dialogs/bindialogs'
+import type { ToolboxResult } from '../../shared/toolbox'
+import { toast } from '../views/binstore'
 
 const S = (d: string) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`
 const SVG_NEW = S('<path d="M8 2.5v11M2.5 8h11"/>')
@@ -263,7 +266,7 @@ export function mountCommandBar(root: HTMLElement): void {
       { separator: true },
       { label: 'Properties', shortcut: 'Alt+Enter', onClick: () => { void actions.properties() } },
       { separator: true },
-      { label: 'Find duplicate files…', disabled: t.isVirtual, onClick: () => app.emit('show-duplicates', { root: t.path }) },
+      { label: 'Tools', submenu: toolsMenu(t) },
       { label: 'Activity history', onClick: () => app.emit('show-history') },
       { label: 'Options', onClick: () => app.emit('show-options') },
     ]
@@ -271,6 +274,160 @@ export function mountCommandBar(root: HTMLElement): void {
     showMenu(items, { x: 0, y: 0, anchorEl: moreBtn, minWidth: 240,
       onClose: () => moreBtn.classList.remove('open') })
   })
+
+  /**
+   * Everything that is a TOOL rather than a file operation, in one place.
+   *
+   * These were all built and all reachable, but only from wherever they
+   * happened to be wired: "Find duplicates" from the … menu and three context
+   * menus, "Fix names" from a folder's context menu alone, and Checksums and
+   * Convert images ONLY by dragging files onto a drop bin — which means you had
+   * to already know they existed to find them. A tool nobody can find is a tool
+   * nobody has.
+   *
+   * Enablement is per tool rather than blanket-disabling the menu: seeing that
+   * "Convert images…" exists but needs pictures selected teaches you the app,
+   * where a missing entry teaches nothing.
+   */
+  function toolsMenu(t: Tab): MenuItem[] {
+    const sel = [...t.selection].filter(p => p.startsWith('/'))
+    const files = t.selectedEntries().filter(e => !e.isDir)
+    const images = files.filter(e => (e.mime || '').startsWith('image/'))
+    const videos = files.filter(e => (e.mime || '').startsWith('video/'))
+    const pdfs = files.filter(e => e.ext === 'pdf')
+    const archives = files.filter(e => /^(zip|7z|rar|tar|gz|bz2|xz|tgz|tbz)$/.test(e.ext))
+    const here = !t.isVirtual && t.path.startsWith('/')
+    return [
+      {
+        label: 'Disk usage…', disabled: !here,
+        onClick: () => app.emit('show-diskusage', t.path),
+      },
+      {
+        label: 'Find duplicate files (identical bytes)…', disabled: !here,
+        onClick: () => app.emit('show-duplicates', sel.length > 1 ? { roots: sel } : { root: t.path }),
+      },
+      {
+        label: 'Fix file names…', disabled: !here,
+        onClick: () => app.emit('show-fixnames', sel.length ? { paths: sel } : { root: t.path }),
+      },
+      { separator: true },
+      {
+        label: `Bulk rename${sel.length ? ` (${sel.length})` : ''}…`, disabled: !sel.length,
+        onClick: () => app.emit('show-bulk-rename', sel),
+      },
+      {
+        label: `Convert images${images.length ? ` (${images.length})` : ''}…`, disabled: !images.length,
+        onClick: () => {
+          void openConvertDialog(images.map(e => e.path), {
+            id: 'tools-convert', action: 'convert', label: 'Convert images',
+            convert: { format: 'jpg', maxDim: 0, quality: 88 },
+          })
+        },
+      },
+      {
+        label: `Checksums${files.length ? ` (${files.length})` : ''}…`, disabled: !files.length,
+        onClick: () => { void runChecksums(files.map(e => e.path), 'sha256') },
+      },
+      {
+        // The one tool here that reaches the network, so it says so before it is clicked rather
+        // than after — and it is enabled only on pictures, because that is all it can do.
+        //
+        // "on the web" vs "on this PC" below is not padding. These two tools run the SAME
+        // perceptual fingerprint and were told apart only by the words "better" and "similar",
+        // which is no distinction at all. What actually differs is WHAT EACH ONE COMPARES AGAINST:
+        // this one asks the internet for a bigger copy, that one asks your own disk for repeats.
+        label: `Find a better version on the web${images.length ? ` (${images.length})` : ''}…`,
+        disabled: !images.length,
+        // One picture is a conversation — look, compare, decide. Many is a PLAN: scan them all,
+        // then review a table and tick what to keep. Stepping through forty pictures one modal at
+        // a time would be the same work with none of the overview.
+        onClick: () => app.emit(
+          images.length > 1 ? 'show-better-batch' : 'show-better-image',
+          images.map(e => e.path)),
+      },
+      {
+        label: sel.length > 1
+          ? `Find repeated pictures on this PC (in ${sel.length} selected)…`
+          : 'Find repeated pictures on this PC…',
+        disabled: !here,
+        onClick: () => app.emit('show-similar',
+          sel.length > 1 ? { root: t.path, paths: sel } : { root: t.path }),
+      },
+      {
+        label: 'Empty folders & broken links…', disabled: !here,
+        onClick: () => app.emit('show-cleanup', t.path),
+      },
+      { separator: true },
+      {
+        label: `Extract audio${videos.length ? ` (${videos.length})` : ''}…`, disabled: !videos.length,
+        onClick: () => runToolbox('extractAudio', videos.map(e => e.path), 'Extracted audio from'),
+      },
+      {
+        label: `Repack as MP4${videos.length ? ` (${videos.length})` : ''}…`, disabled: !videos.length,
+        onClick: () => runToolbox('remuxToMp4', videos.map(e => e.path), 'Repacked'),
+      },
+      {
+        label: `Pictures to PDF${images.length ? ` (${images.length})` : ''}…`, disabled: !images.length,
+        onClick: () => runToolbox('imagesToPdf', images.map(e => e.path), 'Made'),
+      },
+      {
+        label: `PDF to pictures${pdfs.length ? ` (${pdfs.length})` : ''}…`, disabled: !pdfs.length,
+        onClick: () => runToolbox('pdfToImages', pdfs.map(e => e.path), 'Unpacked'),
+      },
+      {
+        label: `Set dates from EXIF${images.length ? ` (${images.length})` : ''}…`, disabled: !images.length,
+        onClick: () => runToolbox('datesFromExif', images.map(e => e.path), 'Dated'),
+      },
+      {
+        label: `Test archives${archives.length ? ` (${archives.length})` : ''}…`, disabled: !archives.length,
+        onClick: () => runToolbox('testArchives', archives.map(e => e.path), 'Passed'),
+      },
+      { separator: true },
+      {
+        label: 'Media health…', disabled: !here,
+        onClick: () => app.emit('show-mediahealth', t.path),
+      },
+      {
+        label: 'Compare with another folder…', disabled: !here,
+        onClick: () => app.emit('show-compare'),
+      },
+      {
+        label: 'Verify checksums…',
+        // only a checksum file can be verified, so the entry says so by being
+        // off rather than by explaining itself after you click it
+        disabled: !sel.some(p => /SUMS(\s*\(\d+\))?$/i.test(p.split('/').pop() ?? '')),
+        onClick: () => app.emit('show-verify', sel.find(p => /SUMS/i.test(p))),
+      },
+      { separator: true },
+      { label: 'Extensions…', onClick: () => app.emit('show-options', 'extensions') },
+      { label: 'System check…', onClick: () => app.emit('show-options', 'system') },
+    ]
+  }
+
+  /**
+   * Run one of the small tools and say what happened.
+   *
+   * They all return the same shape, so they all report the same way: a toast
+   * naming what was produced, or the first real error. Nothing here writes over
+   * an original, so the failure case costs nothing but the message.
+   */
+  function runToolbox(verb: string, paths: string[], verb2: string): void {
+    if (!paths.length) return
+    void (async () => {
+      const r = await liq.invoke(verb, paths).catch(
+        (e: Error) => ({ ok: false, done: [], failed: [], error: String(e?.message ?? e) })) as ToolboxResult
+      if (!r.ok) {
+        toast({ text: r.error ?? r.failed[0]?.error ?? 'That did not work.', bad: true })
+        return
+      }
+      const first = r.done[0]?.split('/').pop() ?? ''
+      toast({
+        text: `${verb2} ${r.done.length === 1 ? first : `${r.done.length} items`}.`,
+        sub: r.failed.length ? `${r.failed.length} failed: ${r.failed[0].error}` : undefined,
+      })
+      void app.activeTab?.refresh()
+    })()
+  }
 
   // ---- enable/disable + trash swap ----
   const update = () => {

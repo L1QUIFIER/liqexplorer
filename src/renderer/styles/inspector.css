@@ -274,6 +274,8 @@
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45);
   cursor: move;
 }
+/* nothing is cropped yet: a drag here draws a new box, so say so */
+.ed-crop.is-full { cursor: crosshair; }
 /* rule-of-thirds guides */
 .ed-crop::before, .ed-crop::after {
   content: '';

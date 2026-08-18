@@ -18,6 +18,8 @@ import type { MenuItem } from '../menus/menu-types'
 import { iconURL } from './items'
 import { isArchiveName, archiveStem } from '../../shared/archive'
 import { volumeOf } from '../core/mounts'
+import { springCancel, springHover } from './spring'
+import { autoScrollAt, autoScrollStop } from './autoscroll'
 
 const DRAG_THRESHOLD = 6
 
@@ -88,6 +90,8 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
   }
 
   function endGesture(): void {
+    springCancel()
+    autoScrollStop()
     armed = null
     dragging = false
     ghost?.remove()
@@ -179,6 +183,13 @@ export function initRightDrag(host: RightDragHost): RightDragHandle {
     }
     target = targetAt(e.clientX, e.clientY)
     markTarget(e.clientX, e.clientY)
+    // Spring loading, same rule as a left drag. This gesture never produces a
+    // `dragover`, so without this call a right drag could hover a tab forever
+    // and nothing would open — which is exactly how it behaved.
+    springHover(document.elementFromPoint(e.clientX, e.clientY))
+    // and scroll the list under the pointer, for the same reason: this gesture
+    // fires no dragover, so it had no auto-scroll at all
+    autoScrollAt(e.clientX, e.clientY)
   }
 
   function dropMenu(sources: string[], dest: DropTarget, x: number, y: number): void {

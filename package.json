@@ -9,6 +9,7 @@
     "start": "bash bin/run.sh",
     "dev": "bash bin/dev.sh",
     "typecheck": "node node_modules/typescript/lib/tsc.js --noEmit",
+    "test:imagelab": "node scripts/test-imagelab.mjs",
     "setup": "bash bin/setup.sh",
     "dist:appimage": "npm run build && electron-builder --linux AppImage"
   },

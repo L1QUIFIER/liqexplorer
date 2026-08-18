@@ -19,7 +19,10 @@
   <link rel="stylesheet" href="styles/options.css">
   <link rel="stylesheet" href="styles/fixnames.css">
   <link rel="stylesheet" href="styles/duplicates.css">
+  <link rel="stylesheet" href="styles/betterimage.css">
+  <link rel="stylesheet" href="styles/similar.css">
   <link rel="stylesheet" href="styles/preview.css">
+  <link rel="stylesheet" href="styles/pickbar.css">
   <!-- last: pane rules override the single-pane boxes in base.css / home.css -->
   <link rel="stylesheet" href="styles/panes.css">
 </head>
@@ -48,6 +51,9 @@
       <div id="sidepane" hidden></div>
     </div>
     <div id="statusbar"></div>
+    <!-- file-picker mode only (chrome/pickbar.ts); an ordinary window never
+         un-hides it, so the layout below the status bar is unchanged -->
+    <div id="pickbar" hidden></div>
   </div>
   <div id="menu-layer"></div>
   <div id="dialog-layer"></div>

@@ -44,6 +44,16 @@ export function mountOps(): void {
   stackEl = el('div', 'ops-stack')
   host.appendChild(stackEl)
   app.on('ops-changed', render)
+  // The status-bar activity light points here. The cards already appear on
+  // their own, so there is nothing to open — the click's job is to say WHERE
+  // they are, which a brief pulse does better than a dialog would.
+  app.on('ops-attention', () => {
+    if (!stackEl?.children.length) return
+    stackEl.classList.remove('ops-attention')
+    void stackEl.offsetWidth              // restart the animation
+    stackEl.classList.add('ops-attention')
+    window.setTimeout(() => stackEl?.classList.remove('ops-attention'), 1200)
+  })
   // seed: pick up operations already running (renderer reload mid-op)
   liq.getOps().then((ops: OpProgress[]) => {
     if (!ops?.length) return

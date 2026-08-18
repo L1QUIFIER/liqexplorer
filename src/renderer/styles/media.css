@@ -153,7 +153,16 @@
 .mvr-img.is-pannable { cursor: grab; }
 .mvr-img.is-panning { cursor: grabbing; }
 
-.mvr-video { max-width: 100%; max-height: 100%; background: #000; }
+/* FILL the stage and letterbox inside it, rather than max-width/max-height —
+   those cap a video at its own pixels, so a 640x480 clip stayed 640x480 on a
+   1920 screen and fullscreen appeared to do nothing. object-fit keeps the
+   aspect ratio, so the frame re-letterboxes whenever the box changes shape. */
+.mvr-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
 /* the transport bar below is the audio control; the element itself is silent chrome */
 .mvr-audio { display: none; }
 .mvr-pdf { width: 100%; height: 100%; border: 0; }
@@ -873,3 +882,128 @@
 .mv-viewer[data-vmode="wall"] .mv-strip { display: none; }
 /* the stage takes the room back */
 .mv-viewer[data-vmode="wall"] .mv-stage { background: #0b0b0b; }
+
+/* The single-item prev/next arrows sit over the stage, which the wall fills —
+   so on a wall they were unclickable buttons for an action that does not apply
+   there (paging is PageUp/PageDown, per tile ⏮/⏭). Hidden rather than left to
+   be clicked at. */
+.mv-viewer[data-vmode="wall"] .mv-nav { display: none; }
+
+/* ---- viewer menu: separators, submenus, destructive entries ---------------
+   The same menu is rendered under the More button and at the pointer on a
+   right-click, in the docked panel and in the popped-out window. */
+.mv-moresep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--divider);
+}
+.mv-moreitem.is-danger { color: var(--danger, #d13438); }
+.mv-morearrow {
+  font-style: normal;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+/* the submenu is a child of its row, so it follows the row and dies with it */
+.mv-moreitem { position: relative; }
+.mv-moresub {
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  margin-left: 2px;
+  z-index: 10;
+}
+/* Placement is decided in JS (placeSubmenu in media/viewer.ts), which measures
+   the submenu against the window and flips or clamps it. A CSS rule guessing
+   from the row's position — which is what used to be here — cannot know how
+   wide the submenu is or where the window edge falls. */
+
+/* ---- consent, asked once before anything is looked up on the internet -----
+   Rendered inside the viewer rather than through the dialog layer, because the
+   popped-out window has no dialog layer to render into. */
+.mv-consent {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 12;
+  width: min(420px, calc(100% - 32px));
+  padding: 18px 18px 14px;
+  border-radius: 10px;
+  background: var(--bg-float-solid, var(--bg-float));
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog), var(--ring-float);
+  color: var(--text-primary);
+}
+.mv-consent h3 { font-size: var(--fs-title); font-weight: 600; margin-bottom: 8px; }
+.mv-consent-body p { line-height: 1.45; margin-bottom: 8px; font-size: var(--fs-body); }
+.mv-consent-note { color: var(--text-secondary); }
+.mv-consent-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.mv-consent-btn {
+  min-width: 110px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--stroke-strong);
+  background: var(--bg-content);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.mv-consent-btn:hover { background: var(--bg-hover); }
+.mv-consent-btn.is-primary { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+
+/* browser / option rows inside the viewer's consent-style panels */
+.mv-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 2px;
+  cursor: pointer;
+  font-size: var(--fs-body);
+}
+.mv-pick-row input { cursor: pointer; }
+.mv-pick-remember {
+  margin-top: 6px;
+  padding-top: 9px;
+  border-top: 1px solid var(--divider);
+  color: var(--text-secondary);
+}
+
+/* ---- delete undo bar ------------------------------------------------------
+   Inside the viewer, not the app's toast: the popped-out window has no app, and
+   a delete there with no feedback and no way back would be the worst version of
+   this feature. */
+.mv-undobar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - 32px);
+  padding: 9px 10px 9px 14px;
+  border-radius: 8px;
+  background: var(--bg-float-solid, var(--bg-float));
+  border: 1px solid var(--stroke-strong);
+  box-shadow: var(--shadow-dialog);
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  animation: mv-undobar-in 160ms ease-out;
+}
+.mv-undobar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-undobar-btn {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.mv-undobar-btn:hover { filter: brightness(1.08); }
+@keyframes mv-undobar-in { from { opacity: 0; transform: translate(-50%, 6px); } }

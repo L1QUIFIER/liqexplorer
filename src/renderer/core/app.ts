@@ -33,6 +33,7 @@ import type {
 } from '../../shared/types'
 import { DEFAULT_VIEW_STATE, DEFAULT_SETTINGS, DEFAULT_SMART_RULES, FINDER_URI } from '../../shared/types'
 import { PUSH } from '../../shared/ipc'
+import { refreshAccent } from './accent'
 import { sortEntries, computeGroups, type Group, setSizeUnits } from '../../shared/sort'
 import { setPreloadDepth } from '../media/preload'
 import { archiveUri, isArchiveUri, parseArchiveUri } from '../../shared/archive'
@@ -338,16 +339,21 @@ export class Tab {
   /** derive rows/groups from entries + viewState */
   recompute(): void {
     const vs = this.viewState
+    // File-picker mode hides what the calling application cannot accept (see
+    // chrome/pickbar.ts). It filters ROWS, never `entries`: the listing is
+    // still the whole folder, so changing the filter is a recompute rather
+    // than a re-read of a network share.
+    const src = this.app.rowFilter ? this.entries.filter(this.app.rowFilter) : this.entries
     // computer:// is already in section order (Folders, then drives, then
     // network) and its groups are built from that order, so a re-sort would
     // interleave the sections and leave every group one row long
     if (this.path === 'computer://') {
-      this.rows = this.entries
-      this.groups = computeGroups(this.entries, vs)
+      this.rows = src
+      this.groups = computeGroups(src, vs)
       this.pruneSelection()
       return
     }
-    let rows = sortEntries(this.entries, vs, this.app.settings.foldersFirst)
+    let rows = sortEntries(src, vs, this.app.settings.foldersFirst)
     if (vs.groupKey !== 'none') {
       // re-sort by group key; V8 sort is stable, so per-group order (sortKey) survives
       rows = sortEntries(rows, { ...vs, sortKey: vs.groupKey, sortDir: vs.groupDir }, false)
@@ -541,6 +547,13 @@ export class App {
   ops: OpProgress[] = []
   undoInfo: UndoInfo = { undoLabel: null, redoLabel: null }
   homePath = ''
+  /** This window is answering another application's file dialog (main/pick.ts).
+   *  It suppresses session restore — a picker opening on eleven remembered tabs
+   *  is not what the caller asked for. */
+  pickMode = false
+  /** Picker mode only: rows this predicate rejects are hidden. Applied in
+   *  Tab.recompute(), so it covers every pane, tab and view mode at once. */
+  rowFilter: ((e: FileEntry) => boolean) | null = null
   /** seed geometry for the NEXT split; views/panes.ts keeps these in
    *  localStorage so the splitter lands where the user last left it */
   defaultSplitRatio = DEFAULT_SPLIT_RATIO
@@ -712,6 +725,9 @@ export class App {
     applyDisplaySettings(this.settings)
     this.theme = await liq.getTheme()
     document.documentElement.dataset.theme = this.theme
+    // before the first paint, so the interface never flashes the built-in blue
+    // and then swap to the desktop's colour
+    await refreshAccent(this.settings).catch(() => null)
     this.homePath = await liq.homeDir()
     this.places = await liq.getPlaces()
     this.clipboard = await liq.clipboardGet()
@@ -731,6 +747,10 @@ export class App {
     liq.on(PUSH.themeChanged, (t: 'light' | 'dark') => {
       this.theme = t
       document.documentElement.dataset.theme = t
+      // a theme flip is usually an ACCENT change too — Mint's light and dark
+      // variants are separate theme directories with their own colours — so the
+      // accent is re-read rather than kept
+      void refreshAccent(this.settings).catch(() => null)
       this.emit('theme-changed', t)
     })
     liq.on(PUSH.opProgress, (p: OpProgress) => {
@@ -747,7 +767,16 @@ export class App {
     liq.on(PUSH.opConflict, (c: ConflictInfo) => this.emit('op-conflict', c))
     liq.on(PUSH.opPassword, (r: unknown) => this.emit('op-password', r))
     liq.on(PUSH.undoChanged, (u: UndoInfo) => { this.undoInfo = u; this.emit('undo-changed', u) })
-    liq.on(PUSH.openPathRequest, (d: { path: string }) => this.newTab(d.path))
+    liq.on(PUSH.openPathRequest, (d: { path: string; select?: string }) => {
+      // `select` is "show me this FILE", not "open this folder" — the tab lands
+      // on the folder with the item already highlighted, which is the whole
+      // difference between finding a file and being dropped next to it
+      if (!d.select) { void this.newTab(d.path); return }
+      const tab = this.activeTab
+      const land = (): void => { tab?.setSelection(new Set([d.select!]), d.select) }
+      if (tab && tab.path === d.path) { land(); return }
+      void (tab ? tab.navigate(d.path) : this.newTab(d.path)).then(land)
+    })
 
     // A path on argv always wins: the user asked for that folder, now.
     const q = new URLSearchParams(location.search)
@@ -761,7 +790,7 @@ export class App {
       if (select) await this.revealOnStartup(select, q.get('properties') === '1')
       return
     }
-    if (await this.restoreSession()) return
+    if (!this.pickMode && await this.restoreSession()) return
     await this.newTab(this.startLocation())
   }
 
@@ -882,6 +911,11 @@ export class App {
   async setSettings(patch: Partial<AppSettings>): Promise<void> {
     this.settings = await liq.setSettings(patch)
     applyDisplaySettings(this.settings)
+    // repaint the accent as soon as it is changed, so the Options dialog shows
+    // the result behind itself instead of asking for a restart
+    if ('accentSource' in patch || 'accentColor' in patch) {
+      void refreshAccent(this.settings).catch(() => null)
+    }
     this.emit('settings-changed', this.settings)
     // both panes of the active tab are on screen: neither may be left stale
     const shown = [this.activePrimary, this.activePrimary?.secondary].filter(Boolean) as Tab[]
@@ -896,7 +930,10 @@ export class App {
    * is debounced in main — this end only has to be cheap and never throw.
    */
   rememberSession(): void {
-    if (!this.tabs.length) return
+    // A picker browses on someone else's behalf. Letting it write the session
+    // would mean answering one upload dialog silently replaced the folders the
+    // user actually had open.
+    if (!this.tabs.length || this.pickMode) return
     const state: SessionState = {
       tabs: this.tabs.map(t => ({
         path: t.path,

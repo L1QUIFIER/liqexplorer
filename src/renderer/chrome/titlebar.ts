@@ -3,6 +3,8 @@
 // tab context menu (Duplicate / Close / Close others / Close to the right).
 // Whole strip is a drag region (base.css); interactive children opt out.
 import { app, liq, Tab } from '../core/app'
+import { dropOntoPath } from '../views/dnd'
+import { registerSpring, springCancel, springHover } from '../views/spring'
 import { PUSH } from '../../shared/ipc'
 
 const SVG_MIN = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1" fill="none"/></svg>'
@@ -105,6 +107,13 @@ export function mountTitlebar(root: HTMLElement): void {
 
   const onPointerMove = (e: PointerEvent) => {
     if (!drag) return
+    // A release that lands outside the window is never delivered here, and this
+    // drag is the one that must not be left running: render() below refuses to
+    // repaint while `drag` is set, so a lost pointerup freezes the whole tab
+    // strip — new tabs never appear and titles stop updating — while the tab
+    // under the cursor keeps sliding. Treat the first button-free move as the
+    // release we missed.
+    if (!e.buttons) { onPointerUp(); return }
     if (!drag.moved) {
       if (Math.abs(e.clientX - drag.startX) < 5) return
       drag.moved = true
@@ -130,6 +139,7 @@ export function mountTitlebar(root: HTMLElement): void {
   const onPointerUp = () => {
     window.removeEventListener('pointermove', onPointerMove)
     window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
     if (!drag) return
     const d = drag
     drag = null
@@ -144,6 +154,61 @@ export function mountTitlebar(root: HTMLElement): void {
     if (renderPending) { renderPending = false; render() }
   }
 
+  // ---- spring-loaded tabs ----
+  //
+  // Drag files onto a tab, hold for a moment, and that tab opens so you can see
+  // where you are about to drop them. Without it a drag to another tab is blind:
+  // you have to drop somewhere, switch, and drag again — or give up and use cut
+  // and paste, which is what the feature really replaces.
+  //
+  // The hold itself lives in views/spring.ts, because a LEFT drag and a RIGHT
+  // drag reach this through completely different events and the rule has to be
+  // the same for both.
+  function wireSpringLoad(el: HTMLElement, index: number): void {
+    registerSpring(el, () => {
+      // resolve the index at fire time: the strip re-renders on navigation and
+      // on reorder, so the index this tab had when it was built may be stale
+      const at = [...list.children].indexOf(el)
+      if (at >= 0 && at !== app.activeTabIndex) app.activateTab(at)
+    })
+    void index
+
+    el.addEventListener('dragover', (e) => {
+      if (!carriesFiles(e.dataTransfer)) return
+      // preventDefault marks this a valid drop target; without it the browser
+      // refuses the drop and shows the "no entry" cursor over the whole strip
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+      springHover([...list.children].indexOf(el) === app.activeTabIndex ? null : el)
+    })
+    el.addEventListener('dragleave', (e) => {
+      // dragleave also fires when the pointer crosses onto a CHILD of the tab
+      // (the label, the close button), which would cancel a spring the user is
+      // still holding; relatedTarget tells the two apart
+      const to = e.relatedTarget as Node | null
+      if (to && el.contains(to)) return
+      springCancel()
+    })
+    // dropping ON the tab itself drops into that tab's folder, so a deliberate
+    // aim at the tab does not require waiting out the spring first
+    el.addEventListener('drop', (e) => {
+      if (!carriesFiles(e.dataTransfer)) return
+      e.preventDefault()
+      e.stopPropagation()
+      springCancel()
+      const at = [...list.children].indexOf(el)
+      const dest = app.tabs[at]?.path
+      if (dest && e.dataTransfer) dropOntoPath(dest, e.dataTransfer, e)
+    })
+  }
+
+  /** does this drag carry files, rather than being a tab being reordered? */
+  const carriesFiles = (dt: DataTransfer | null): boolean => {
+    if (!dt) return false
+    const t = Array.from(dt.types)
+    return t.includes('application/x-liq-paths') || t.includes('Files') || t.includes('text/uri-list')
+  }
+
   // ---- render ----
   const render = () => {
     if (drag) { renderPending = true; return }
@@ -154,6 +219,10 @@ export function mountTitlebar(root: HTMLElement): void {
       el.setAttribute('role', 'tab')
       el.setAttribute('aria-selected', String(i === app.activeTabIndex))
       el.title = t.pinned ? `${t.title || '…'}\n${t.path}` : t.path
+      // right-drag finds its targets by this attribute (views/rightdrag.ts); it
+      // ignores virtual paths itself, so home:// and trash:// need no guard here
+      el.dataset.liqPath = t.path
+      el.dataset.liqLabel = t.title || t.path
 
       const ic = document.createElement('img')
       ic.className = 'tb-tab-icon'
@@ -191,7 +260,9 @@ export function mountTitlebar(root: HTMLElement): void {
         drag = { index: i, el, startX: e.clientX, grabDX: e.clientX - el.getBoundingClientRect().left, slotLeft: 0, moved: false }
         window.addEventListener('pointermove', onPointerMove)
         window.addEventListener('pointerup', onPointerUp)
+        window.addEventListener('pointercancel', onPointerUp)
       })
+      wireSpringLoad(el, i)
       el.addEventListener('auxclick', (e) => { if (e.button === 1) app.closeTab(i) })  // pinned tabs refuse
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault()

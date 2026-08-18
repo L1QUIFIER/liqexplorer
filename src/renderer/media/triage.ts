@@ -127,7 +127,7 @@ export function createTriage(
   const delBtn = document.createElement('button')
   delBtn.className = 'mv-tri-del'
   delBtn.innerHTML = svg(TRASH) + '<span>Recycle</span>'
-  delBtn.title = 'Move to the recycle bin (Delete)'
+  delBtn.title = 'Delete (Del · Shift+Del skips the prompt)'
   delBtn.addEventListener('click', () => { recycle() })
   const undoBtn = document.createElement('button')
   undoBtn.className = 'mv-tri-undo'
@@ -231,7 +231,11 @@ export function createTriage(
     const k = e.key
     if (k === 't' || k === 'T') { toggle(); return true }
     if (!on || !item) return false
-    if (k === 'Delete') { recycle(); return true }
+    // Delete is handled by the viewer (media/viewer.ts), which owns the
+    // confirmation, the Shift bypass and the undo bar. Claiming it here as well
+    // would give the same key two behaviours depending on whether this deck
+    // happens to be open.
+
     if (k >= '0' && k <= '5') { rate(Number(k)); return true }
     const lower = k.toLowerCase()
     if (lower.length === 1 && lower >= 'a' && lower <= 'z') {

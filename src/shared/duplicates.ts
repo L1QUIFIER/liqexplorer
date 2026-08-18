@@ -80,8 +80,49 @@ export interface DupProgress {
   /** the file being read right now */
   current: string
   done: boolean
+  /**
+   * Groups confirmed SINCE THE LAST PUSH — append, never replace.
+   *
+   * The scanner completes one size bucket end to end before moving on, so every
+   * group here is already final: it will not be revised or withdrawn later.
+   * That is what makes streaming safe to show. Waiting for the whole scan (the
+   * old behaviour, groups only in `result`) meant a big library showed nothing
+   * at all for minutes.
+   */
+  groups?: DupGroup[]
+  /** running totals, so the header can count without re-summing every push */
+  foundGroups: number
+  foundWasted: number
+  /** a limit was hit; the stream is a prefix, said as soon as it happens */
+  truncated?: boolean
   /** present exactly once, on the final push */
   result?: DupScanResult
+}
+
+/**
+ * A scan the user could return to.
+ *
+ * Scans outlive the dialog: closing it detaches rather than cancelling, because
+ * throwing away ten minutes of hashing because someone wanted to look at a
+ * folder is the opposite of robust.
+ */
+export interface DupScanSummary {
+  scanId: number
+  roots: string[]
+  stage: DupStage
+  done: boolean
+  foundGroups: number
+  foundWasted: number
+  filesSeen: number
+  startedAt: number
+}
+
+/** everything found so far, for a dialog attaching to a scan in flight */
+export interface DupAttachReply {
+  ok: boolean
+  progress?: DupProgress
+  /** every group confirmed up to now, in arrival order */
+  groups?: DupGroup[]
 }
 
 export interface DupScanResult {

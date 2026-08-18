@@ -358,7 +358,12 @@ export function mountViewHost(root: HTMLElement, opts: ViewHostOpts = {}): void 
     el.dataset.idx = String(i)
     el.style.cssText =
       `position:absolute;top:0;left:0;transform:translate(${it.left}px,${it.top}px);` +
-      `width:${it.width}px;height:${it.height}px`
+      // min-height as well as height: a SELECTED grid tile is allowed to grow
+      // downward so its ring and background wrap the expanded filename (see
+      // .vh-grid.selected in views.css). Without the floor, a short name would
+      // shrink the tile below its cell and the selection box would no longer
+      // match the grid.
+      `width:${it.width}px;height:${it.height}px;min-height:${it.height}px`
     if (it.kind === 'header') {
       el.draggable = false
       renderGroupHeader(el, it.group!, !!it.collapsed)
